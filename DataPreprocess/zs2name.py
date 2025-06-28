@@ -2,7 +2,7 @@ import os
 from tqdm import tqdm
 import pydicom
 import pandas as pd
-import dicom2nii0617
+import dicom2nii
 
 
 def extract_info(file_path):
@@ -39,7 +39,7 @@ if __name__ == "__main__":
             continue
         dicom_path = root_path + str(i) + ' DICOM'
         if os.path.exists(dicom_path):
-            file_list = dicom2nii0617.list_files(dicom_path)
+            file_list = dicom2nii.list_files(dicom_path)
             find_ta(i, file_list)
         if i % 5 == 0:
             df = pd.DataFrame({
