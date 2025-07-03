@@ -29,7 +29,7 @@ def find_ta(i, file_list):
 
 
 if __name__ == "__main__":
-    root_path = '/home/yanshuyu/Data/AID/TAK/DICOM_data/'
+    root_path = '~/Data/AID/TAK/DICOM_data/'
     ans = {}
     zs2name = {}
     dicom = []
@@ -47,6 +47,6 @@ if __name__ == "__main__":
                 'PatientID': list(zs2name.keys()),
                 'PatientName': list(zs2name.values())
             })
-            excel_filename = "/home/yanshuyu/Data/AID/TAK/patients2.xlsx"
+            excel_filename = "~/Data/AID/TAK/patients2.xlsx"
             df.to_excel(excel_filename, index=False)
 

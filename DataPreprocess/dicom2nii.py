@@ -100,8 +100,8 @@ def dicom2nii(patient_list, root_path):
 
 
 if __name__ == "__main__":
-    root_path = '/home/yanshuyu/Desktop/新建文件夹/'
-    output_path = '/home/yanshuyu/Data/AID/TAK/0'
+    root_path = '~/Desktop/新建文件夹/'
+    output_path = '~/Data/AID/TAK/0'
     if os.path.exists(root_path):
         file_list = list_files(root_path)
         patient_list = classify(file_list)

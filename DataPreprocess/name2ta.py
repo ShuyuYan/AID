@@ -18,7 +18,7 @@ def merge(file_path):
 
     print(len(name), len(ta))
     df1.insert(2, 'TA', ta)
-    df1.to_excel('/home/yanshuyu/Data/AID/TAK/patients1.xlsx', index=False)  # index=False表示不保存行索引
+    df1.to_excel('~/Data/AID/TAK/patients1.xlsx', index=False)  # index=False表示不保存行索引
 
 
 
