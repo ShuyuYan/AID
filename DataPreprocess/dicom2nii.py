@@ -37,6 +37,10 @@ def extract_info(file_path):
         'Pixel Spacing': ds.get('PixelSpacing', ''),
         'SOP Class UID': ds.get('SOPClassUID', ''),
         'InstanceNumber': ds.get('InstanceNumber', ''),
+        'study_date': ds.get('StudyDate', ''),
+        'series_date': ds.get('SeriesDate', ''),
+        'acquisition_date': ds.get('AcquisitionDate', ''),
+        'content_date': ds.get('ContentDate', ''),
     }
     return info
 
@@ -96,14 +100,12 @@ def dicom2nii(patient_list, root_path):
 
 
 if __name__ == "__main__":
-    root_path = '/home/yanshuyu/Data/AID/DICOM_data/'
+    root_path = '/home/yanshuyu/Desktop/新建文件夹/'
     output_path = '/home/yanshuyu/Data/AID/TAK/0'
-    for i in range(238, 329):
-        dicom_path = root_path + str(i) + ' DICOM'
-        if os.path.exists(dicom_path):
-            file_list = list_files(dicom_path)
-            patient_list = classify(file_list)
-            dicom2nii(patient_list, output_path)
+    if os.path.exists(root_path):
+        file_list = list_files(root_path)
+        patient_list = classify(file_list)
+        dicom2nii(patient_list, output_path)
         exit()
 
 
