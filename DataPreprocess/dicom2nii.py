@@ -37,10 +37,10 @@ def extract_info(file_path):
         'Pixel Spacing': ds.get('PixelSpacing', ''),
         'SOP Class UID': ds.get('SOPClassUID', ''),
         'InstanceNumber': ds.get('InstanceNumber', ''),
-        'study_date': ds.get('StudyDate', ''),
-        'series_date': ds.get('SeriesDate', ''),
-        'acquisition_date': ds.get('AcquisitionDate', ''),
-        'content_date': ds.get('ContentDate', ''),
+        'StudyDate': ds.get('StudyDate', ''),
+        'SeriesDate': ds.get('SeriesDate', ''),
+        'AcquisitionDate': ds.get('AcquisitionDate', ''),
+        'ContentDate': ds.get('ContentDate', ''),
     }
     return info
 
