@@ -44,6 +44,8 @@ if __name__ == '__main__':
         py = ''.join(c for c in df['pinyin'][i] if c.isupper())
         data.append([ta, date, dcm, py])
         print(ta, date, dcm, py)
+        if '+' in str(dcm):
+            continue
 
         dcm_folder = root_path + 'DICOM_data/' + str(dcm) + ' DICOM'
         file_list = list_files(dcm_folder)
@@ -52,7 +54,6 @@ if __name__ == '__main__':
         for y in patient_list:
             for file in y[1]:
                 name = ''.join(c for c in file['PatientName'] if c.isupper())
-                print(name)
                 if name == py:
                     flag = 1
                     new_date = [file['StudyDate'], file['SeriesDate'], file['AcquisitionDate'], file['ContentDate']]
@@ -63,15 +64,19 @@ if __name__ == '__main__':
                 break
         if flag == 0:
             data[i].append('No name')
+            data[i] += [0, 0, 0, 0]
         elif flag == 1:
             data[i].append('Wrong date')
+            data[i] += new_date
         else:
             data[i].append('Successful')
+            data[i] += [0, 0, 0, 0]
 
-        opt = input()
-        if opt == '1':
-            break
-    save = pd.DataFrame(data=data, columns=['TA', 'date', 'dcm', 'pinyin', 'status'])
+        # opt = input()
+        # if opt == '1':
+        #     break
+    save = pd.DataFrame(data=data, columns=['TA', 'date', 'dcm', 'pinyin', 'status',
+                                            'StudyDate', 'SeriesDate', 'AcquisitionDate', 'ContentDate'])
     save.to_excel(root_path + '/428MRA/data.xlsx', sheet_name='data')
 
 
