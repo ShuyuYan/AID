@@ -35,6 +35,7 @@ def dicom2nii(patient_list, output_path):
 if __name__ == '__main__':
     root_path = os.path.expanduser('~/Data/AID/')
     mra_path = os.path.expanduser('~/Data/AID/428mra.xlsx')
+    err_list = [264, 265, 270, 274, 275, 276, 277, 279, 281, 282, 284, 286, 287, 288]
     df = pd.read_excel(mra_path, sheet_name='Report')
     data = []
     n = len(df)
@@ -45,6 +46,10 @@ if __name__ == '__main__':
         data.append([ta, date, dcm, py])
         print(ta, date, dcm, py)
         if '+' in str(dcm):
+            continue
+        if dcm in err_list:
+            data[i].append('DICOM error')
+            data[i] += [0, 0, 0, 0]
             continue
 
         dcm_folder = root_path + 'DICOM_data/' + str(dcm) + ' DICOM'
@@ -72,12 +77,14 @@ if __name__ == '__main__':
             data[i].append('Successful')
             data[i] += [0, 0, 0, 0]
 
+        save = pd.DataFrame(data=data, columns=['TA', 'date', 'dcm', 'pinyin', 'status',
+                                                'StudyDate', 'SeriesDate', 'AcquisitionDate', 'ContentDate'])
+        save.to_excel(root_path + '/428MRA/data.xlsx', sheet_name='data')
+
         # opt = input()
         # if opt == '1':
         #     break
-    save = pd.DataFrame(data=data, columns=['TA', 'date', 'dcm', 'pinyin', 'status',
-                                            'StudyDate', 'SeriesDate', 'AcquisitionDate', 'ContentDate'])
-    save.to_excel(root_path + '/428MRA/data.xlsx', sheet_name='data')
+
 
 
 
