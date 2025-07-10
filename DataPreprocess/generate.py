@@ -36,7 +36,7 @@ if __name__ == '__main__':
     root_path = os.path.expanduser('~/Data/AID/')
     mra_path = os.path.expanduser('~/Data/AID/428mra.xlsx')
     err_list = [264, 265, 270, 274, 275, 276, 277, 279, 281, 282, 284, 286, 287, 288]
-    df = pd.read_excel(mra_path, sheet_name='Report')
+    df = pd.read_excel(mra_path, sheet_name='Sheet3')
     data = []
     n = len(df)
     tot = -1
@@ -62,7 +62,8 @@ if __name__ == '__main__':
             for y in patient_list:
                 for file in y[1]:
                     name = ''.join(c for c in file['PatientName'] if c.isupper())
-                    if name == py:
+                    print(name, py)
+                    if py in name:
                         flag = 1
                         new_date = [file['StudyDate'], file['SeriesDate'], file['AcquisitionDate'], file['ContentDate']]
                         output_path = root_path + '428MRA/' + str(ta)
