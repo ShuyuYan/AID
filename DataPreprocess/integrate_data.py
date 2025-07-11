@@ -66,7 +66,7 @@ if __name__ == '__main__':
                 result = []
                 for col in head[7:]:
                     cell_value = bl.iloc[j][col]
-                    result.append(str(cell_value))
+                    result.append(cell_value)
                 data[i] += result
                 break
 
