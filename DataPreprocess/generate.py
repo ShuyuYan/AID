@@ -21,7 +21,7 @@ def dicom2nii(patient_list, output_path):
             if file['SeriesDesc'] + file['ImageSize'] != pre:
                 # print(pre, cur_series)
                 save_name = pre + '.nii'
-                pre = file['SeriesDesc'] + file['ImageSize']
+                pre = (file['SeriesDesc'] + file['ImageSize']).replace('<', '').replace('>', '')
                 if len(cur_series) != 0:
                     convert(cur_series, output_path, save_name)
                 cur_series = []
