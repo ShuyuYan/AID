@@ -29,3 +29,5 @@ def harmonize_date_format(file_path):
     df.to_excel(file_path, index=False, sheet_name='data')
 
 
+if __name__ == '__main__':
+    harmonize_date_format('/home/yanshuyu/Data/AID/all.xlsx')
