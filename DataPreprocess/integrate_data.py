@@ -1,5 +1,8 @@
 import os
 import pandas as pd
+"""
+整合Baseline、Report和mra图像地址到一个Excel
+"""
 
 if __name__ == '__main__':
     nii_path = os.path.expanduser('~/Data/AID/428MRA')
