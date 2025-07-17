@@ -5,7 +5,7 @@ import numpy as np
 from tqdm import tqdm
 from torchvision.models import ResNet50_Weights
 import os
-from utils.Dataset import VesselDataset
+from utils.Dataset import MRADataset
 
 
 def load_model():
@@ -40,7 +40,7 @@ def extract_features(img, model, batch_size):
 
 image_folder = os.path.expanduser('~/Data/AID/428MRA/TA100')
 image_paths = [os.path.join(image_folder, file) for file in os.listdir(image_folder) if file.endswith(".nii")]
-dataset = VesselDataset(image_paths)
+dataset = MRADataset(image_paths)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = load_model()
 

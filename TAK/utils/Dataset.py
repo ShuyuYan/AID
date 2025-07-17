@@ -4,7 +4,7 @@ import torch
 from torch.utils.data import Dataset
 
 
-class VesselDataset(Dataset):
+class MRADataset(Dataset):
     def __init__(self, image_paths):
         self.image_paths = image_paths
 
