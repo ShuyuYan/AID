@@ -2,6 +2,10 @@ import os
 import pandas as pd
 from dicom2nii import list_files, classify
 import SimpleITK as sitk
+"""
+根据有报告的患者名单查找相应的原始DICOM文件夹，对比姓名和日期一致后转为nii格式并保存到TA编号的文件夹中
+转换结果和错误信息等保存到data.xlsx
+"""
 
 
 def convert(series, output_path, save_name):
@@ -34,9 +38,9 @@ def dicom2nii(patient_list, output_path):
 
 if __name__ == '__main__':
     root_path = os.path.expanduser('~/Data/AID/')
-    mra_path = os.path.expanduser('~/Data/AID/428mra.xlsx')
-    err_list = [264, 265, 270, 274, 275, 276, 277, 279, 281, 282, 284, 286, 287, 288]
-    df = pd.read_excel(mra_path, sheet_name='Sheet3')
+    mra_path = os.path.expanduser('~/Data/AID/318MRA.xlsx')
+    err_list = [0, 264, 265, 270, 282]
+    df = pd.read_excel(mra_path, sheet_name='Report')
     data = []
     n = len(df)
     tot = -1
@@ -66,7 +70,7 @@ if __name__ == '__main__':
                     if py in name:
                         flag = 1
                         new_date = [file['StudyDate'], file['SeriesDate'], file['AcquisitionDate'], file['ContentDate']]
-                        output_path = root_path + '428MRA/' + str(ta)
+                        output_path = root_path + '318MRA/' + str(ta)
                         if date in new_date:
                             flag = 2
                             dicom2nii([y], output_path)

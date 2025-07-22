@@ -1,7 +1,7 @@
 import os
 import pandas as pd
 """
-整合Baseline、Report和mra图像地址到一个Excel
+遍历有MRA的患者，整合Baseline、Report和MRA图像地址到一个Excel
 """
 
 if __name__ == '__main__':
