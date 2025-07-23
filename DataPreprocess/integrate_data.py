@@ -5,8 +5,8 @@ import pandas as pd
 """
 
 if __name__ == '__main__':
-    nii_path = os.path.expanduser('~/Data/AID/428MRA')
-    mra_path = os.path.expanduser('~/Data/AID/428mra.xlsx')
+    nii_path = os.path.expanduser('~/Data/AID/MRA')
+    mra_path = os.path.expanduser('~/Data/AID/MRA.xlsx')
     baseline_path = os.path.expanduser('~/Data/AID/Baseline.xlsx')
     TA_list = os.listdir(nii_path)
     TA_list.sort()

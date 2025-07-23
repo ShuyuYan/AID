@@ -40,7 +40,7 @@ if __name__ == '__main__':
     root_path = os.path.expanduser('~/Data/AID/')
     mra_path = os.path.expanduser('~/Data/AID/318MRA.xlsx')
     err_list = [0, 264, 265, 270, 282]
-    df = pd.read_excel(mra_path, sheet_name='Report')
+    df = pd.read_excel(mra_path, sheet_name='remain')
     # 统一日期格式
     df['mra_examination_date'] = pd.to_datetime(df['mra_examination_date'], errors='coerce')
     data = []
