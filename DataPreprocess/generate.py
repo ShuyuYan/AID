@@ -41,11 +41,14 @@ if __name__ == '__main__':
     mra_path = os.path.expanduser('~/Data/AID/318MRA.xlsx')
     err_list = [0, 264, 265, 270, 282]
     df = pd.read_excel(mra_path, sheet_name='Report')
+    # 统一日期格式
+    df['mra_examination_date'] = pd.to_datetime(df['mra_examination_date'], errors='coerce')
     data = []
     n = len(df)
     tot = -1
     for i in range(n):
         ta, date, dcm = df['serial_number'][i], df['mra_examination_date'][i], str(df['DICOM'][i])
+        print(date)
         date = str(date).split()[0].replace('-', '')
         py = ''.join(c for c in df['pinyin'][i] if c.isupper())
 
@@ -87,5 +90,5 @@ if __name__ == '__main__':
 
             save = pd.DataFrame(data=data, columns=['TA', 'date', 'dcm', 'pinyin', 'status',
                                                     'StudyDate', 'SeriesDate', 'AcquisitionDate', 'ContentDate'])
-            save.to_excel(root_path + '/428MRA/data.xlsx', sheet_name='data')
+            save.to_excel(root_path + '/318MRA/data.xlsx', sheet_name='data')
 
