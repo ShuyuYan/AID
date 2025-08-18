@@ -38,7 +38,7 @@ def extract_features(img, model, batch_size):
     return np.mean(features, axis=0)  # (2048, )
 
 
-image_folder = os.path.expanduser('~/Data/AID/428MRA/TA100')
+image_folder = os.path.expanduser('~/Data/AID/MRA/TA159')
 image_paths = [os.path.join(image_folder, file) for file in os.listdir(image_folder) if file.endswith(".nii")]
 dataset = MRADataset(image_paths)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
