@@ -1,97 +1,135 @@
-import pandas as pd
 import os
-from sklearn.preprocessing import LabelEncoder
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, Trainer, TrainingArguments
+import pandas as pd
 import torch
-from torch.utils.data import Dataset
+from torch import nn
+from torch.utils.data import Dataset, DataLoader
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import classification_report, accuracy_score
+from transformers import AutoTokenizer, AutoModel
+from tqdm import tqdm
+import warnings
+from sklearn.exceptions import UndefinedMetricWarning
 
-# 禁用wandb
-os.environ["WANDB_DISABLED"] = "true"
+warnings.filterwarnings("ignore", category=UndefinedMetricWarning)
 
-# 1. 读取Excel
-df = pd.read_excel(os.path.expanduser('~/Data/AID/all.xlsx'), sheet_name='pre')
-
-# 改成简洁列名
+# ======= 参数设置 =======
+excel_path = os.path.expanduser('~/Data/AID/all.xlsx')
+sheet_name = 'pre'
 report_col = 'mra_report'
 label_col = 'type（1-GC+cs，2-GC+b/ts，3-others（单GC or GC+中药/HCQ，4-上述药物均无）'
+bert_path = "/home/yanshuyu/Data/AID/TAK/Bio_ClinicalBERT"
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+max_length = 384
+batch_size = 16
+epochs = 15
+learning_rate = 2e-5
+
+# ======= 1. 读取数据 =======
+df = pd.read_excel(excel_path, sheet_name=sheet_name)
 texts = df[report_col].astype(str).tolist()
 labels = df[label_col].astype(str).tolist()
 
-# 2. 标签编码
-le = LabelEncoder()
-labels = le.fit_transform(labels)
-num_labels = len(le.classes_)
+# 标签编码
+label_encoder = LabelEncoder()
+labels = label_encoder.fit_transform(labels)
+num_labels = len(label_encoder.classes_)
 
-# 3. 切分训练/测试集
-train_texts, test_texts, train_labels, test_labels = train_test_split(
-    texts, labels, test_size=0.2, random_state=42
-)
-
-# 4. 加载BioClinicalBERT
-model_name = os.path.expanduser('~/Data/AID/TAK/Bio_ClinicalBERT')
-tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=False)
-model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=num_labels)
-
-# 5. 创建Dataset类
+# ======= 2. 自定义Dataset =======
 class ReportDataset(Dataset):
-    def __init__(self, texts, labels, tokenizer, max_len=256):
+    def __init__(self, texts, labels, tokenizer, max_length):
         self.texts = texts
         self.labels = labels
         self.tokenizer = tokenizer
-        self.max_len = max_len
+        self.max_length = max_length
 
     def __len__(self):
         return len(self.texts)
 
     def __getitem__(self, idx):
         text = self.texts[idx]
+        label = self.labels[idx]
         encoding = self.tokenizer(
             text,
+            padding='max_length',
             truncation=True,
-            padding="max_length",
-            max_length=self.max_len,
-            return_tensors="pt"
+            max_length=self.max_length,
+            return_tensors='pt'
         )
         return {
-            "input_ids": encoding["input_ids"].squeeze(),
-            "attention_mask": encoding["attention_mask"].squeeze(),
-            "labels": torch.tensor(self.labels[idx], dtype=torch.long)
+            'input_ids': encoding['input_ids'].squeeze(),
+            'attention_mask': encoding['attention_mask'].squeeze(),
+            'label': torch.tensor(label, dtype=torch.long)
         }
 
-train_dataset = ReportDataset(train_texts, train_labels, tokenizer)
-test_dataset = ReportDataset(test_texts, test_labels, tokenizer)
-
-# 6. 设置训练参数
-training_args = TrainingArguments(
-    output_dir="./results",
-    save_strategy="epoch",             # 每个epoch保存模型
-    save_total_limit=1,                # 只保留最近一个checkpoint
-    learning_rate=2e-5,
-    per_device_train_batch_size=8,
-    per_device_eval_batch_size=8,
-    num_train_epochs=20,
-    weight_decay=0.01,
-    logging_dir='./logs',
-    logging_steps=50,
-    report_to="none"                   # 不使用wandb
+# ======= 3. 划分训练/测试 =======
+from sklearn.model_selection import train_test_split
+train_texts, test_texts, train_labels, test_labels = train_test_split(
+    texts, labels, test_size=0.2, random_state=42, stratify=labels
 )
 
-# 7. 定义Trainer
-trainer = Trainer(
-    model=model,
-    args=training_args,
-    train_dataset=train_dataset,
-    eval_dataset=test_dataset,
-    tokenizer=tokenizer,
-)
+tokenizer = AutoTokenizer.from_pretrained(bert_path)
+train_dataset = ReportDataset(train_texts, train_labels, tokenizer, max_length)
+test_dataset = ReportDataset(test_texts, test_labels, tokenizer, max_length)
 
-# 8. 训练模型
-trainer.train()
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=batch_size)
 
-# 9. 模型评估
-predictions = trainer.predict(test_dataset)
-preds = predictions.predictions.argmax(-1)
-print(classification_report(test_labels, preds, target_names=le.classes_))
+# ======= 4. 定义模型 =======
+class ClinicalBERTClassifier(nn.Module):
+    def __init__(self, bert_path, num_labels):
+        super(ClinicalBERTClassifier, self).__init__()
+        self.bert = AutoModel.from_pretrained(bert_path)
+        self.dropout = nn.Dropout(0.3)
+        self.classifier = nn.Linear(self.bert.config.hidden_size, num_labels)
+
+    def forward(self, input_ids, attention_mask):
+        outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
+        cls_output = outputs.last_hidden_state[:, 0, :]  # CLS token
+        cls_output = self.dropout(cls_output)
+        logits = self.classifier(cls_output)
+        return logits
+
+model = ClinicalBERTClassifier(bert_path, num_labels).to(device)
+
+# ======= 5. 换成Adam优化器 =======
+optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+criterion = nn.CrossEntropyLoss()
+
+# ======= 6. 训练循环 =======
+for epoch in range(epochs):
+    model.train()
+    total_loss = 0
+    for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}"):
+        input_ids = batch['input_ids'].to(device)
+        attention_mask = batch['attention_mask'].to(device)
+        labels = batch['label'].to(device)
+
+        optimizer.zero_grad()
+        logits = model(input_ids, attention_mask)
+        loss = criterion(logits, labels)
+        loss.backward()
+        optimizer.step()
+
+        total_loss += loss.item()
+
+    avg_loss = total_loss / len(train_loader)
+    print(f"Epoch {epoch+1}/{epochs} - Train Loss: {avg_loss:.4f}")
+
+    # ===== 验证集评估 =====
+    model.eval()
+    preds, true_labels = [], []
+    with torch.no_grad():
+        for batch in test_loader:
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            labels = batch['label'].to(device)
+
+            logits = model(input_ids, attention_mask)
+            predictions = torch.argmax(logits, dim=1)
+            preds.extend(predictions.cpu().numpy())
+            true_labels.extend(labels.cpu().numpy())
+
+    acc = accuracy_score(true_labels, preds)
+    print(f"Validation Accuracy: {acc:.4f}")
+    print(classification_report(true_labels, preds, target_names=label_encoder.classes_))
