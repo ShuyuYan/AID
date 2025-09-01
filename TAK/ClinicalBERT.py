@@ -9,6 +9,8 @@ from transformers import AutoTokenizer, AutoModel
 from tqdm import tqdm
 import warnings
 from sklearn.exceptions import UndefinedMetricWarning
+from sklearn.model_selection import train_test_split
+
 
 warnings.filterwarnings("ignore", category=UndefinedMetricWarning)
 
@@ -63,7 +65,6 @@ class ReportDataset(Dataset):
         }
 
 # ======= 3. 划分训练/测试 =======
-from sklearn.model_selection import train_test_split
 train_texts, test_texts, train_labels, test_labels = train_test_split(
     texts, labels, test_size=0.2, random_state=42, stratify=labels
 )
@@ -90,9 +91,8 @@ class ClinicalBERTClassifier(nn.Module):
         logits = self.classifier(cls_output)
         return logits
 
-model = ClinicalBERTClassifier(bert_path, num_labels).to(device)
 
-# ======= 5. 换成Adam优化器 =======
+model = ClinicalBERTClassifier(bert_path, num_labels).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 criterion = nn.CrossEntropyLoss()
 
