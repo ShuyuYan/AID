@@ -18,15 +18,15 @@ def convert_date(date_str):
             return date_str
 
 
-def harmonize_date_format(file_path):
+def harmonize_date_format(file_path, sheet_name):
     """
     统一两种时间格式
     """
-    date = ['mra_examination_date', 'dob',	'origin_symptom_date', 'diagnosis_date']
-    df = pd.read_excel(file_path, sheet_name='data')
+    date = ['mra_examination_date','date_enrolled', 'dob',	'origin_symptom_date', 'diagnosis_date']
+    df = pd.read_excel(file_path, sheet_name=sheet_name)
     for id in date:
         df[id] = df[id].apply(convert_date)
-    df.to_excel(file_path, index=False, sheet_name='data')
+    df.to_excel(file_path, index=False, sheet_name=sheet_name)
 
 
 def remove_angle_brackets_in_filenames(root_dir):
@@ -51,5 +51,5 @@ def remove_angle_brackets_in_filenames(root_dir):
 
 
 if __name__ == '__main__':
-    # harmonize_date_format('/home/yanshuyu/Data/AID/all.xlsx')
-    remove_angle_brackets_in_filenames(os.path.expanduser('~/Data/AID/MRA'))
+    harmonize_date_format('/home/yanshuyu/Data/AID/all.xlsx', 'data')
+    # remove_angle_brackets_in_filenames(os.path.expanduser('~/Data/AID/MRA'))
