@@ -30,5 +30,5 @@ def multiple_imputation(file_path, sheet_name="data", n_sets=5, output_prefix="i
 
 # 使用示例
 if __name__ == "__main__":
-    multiple_imputation("/home/yanshuyu/Data/AID/new baseline.xlsx", sheet_name="Sheet2", n_sets=5,
+    multiple_imputation("/home/yanshuyu/Data/AID/new baseline.xlsx", sheet_name="before", n_sets=5,
                         output_prefix="/home/yanshuyu/Data/AID/imputed")

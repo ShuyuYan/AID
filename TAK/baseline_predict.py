@@ -1,113 +1,186 @@
 import pandas as pd
 import os
-from boruta import BorutaPy
+import numpy as np
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report, accuracy_score
-from sklearn.model_selection import train_test_split
 from sklearn.impute import SimpleImputer
+from sklearn.model_selection import StratifiedKFold, cross_validate, train_test_split
+from sklearn.metrics import classification_report, accuracy_score, f1_score, make_scorer
+from sklearn.utils.class_weight import compute_sample_weight
+from imblearn.over_sampling import SMOTE
 import xgboost as xgb
 
-# 读取数据
-df = pd.read_excel(os.path.expanduser('~/Data/AID/all.xlsx'), sheet_name='pre')
+# ========== 数据读取 ==========
+df = pd.read_excel(os.path.expanduser('~/Data/AID/all.xlsx'), sheet_name='effect1')
+target_col = df.columns[-3]
 
-# 标签列
-target_col = df.columns[-1]
-
-# 只保留数值特征
+# 特征 + 标签
 X = df.select_dtypes(include=["int64", "float64"])
 X = X.drop(columns=[target_col], errors="ignore")
-y = df[target_col]
+y = df[target_col].values
 
-# 删除全NaN列
-X = X.dropna(axis=1, how="all")
+imputer = SimpleImputer(strategy="mean")
+X = imputer.fit_transform(X)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
 
-# 缺失值填充（中位数）
-imputer = SimpleImputer(strategy="median")
-X_imputed = imputer.fit_transform(X)
+# ========== 定义评估指标 ==========
+scoring = {
+    "accuracy": make_scorer(accuracy_score),
+    "f1_macro": make_scorer(f1_score, average="macro")
+}
 
-# 转换为numpy
-X_np = X_imputed
-y_np = y.values
+# ========== 定义模型 ==========
+def get_models(class_weight=None):
+    return {
+        "RandomForest": RandomForestClassifier(
+            n_estimators=200, random_state=42, class_weight=class_weight
+        ),
+        "XGBoost": xgb.XGBClassifier(
+            n_estimators=300, learning_rate=0.1, max_depth=5,
+            random_state=42, use_label_encoder=False, eval_metric="mlogloss"
+        )
+    }
 
-# =================== 先做一次数据划分（保持一致对比） ===================
-X_train_full, X_test_full, y_train, y_test = train_test_split(
-    X_np, y_np, test_size=0.2, random_state=42, stratify=y
-)
+# ========== 存储结果 ==========
+results = []
+reports = []
 
-# =============== 特征选择 (Boruta) ===============
-rf_boruta = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1, class_weight="balanced")
-boruta_selector = BorutaPy(
-    estimator=rf_boruta,
-    n_estimators='auto',
-    random_state=42
-)
+# 自定义函数：在CV中收集 y_true, y_pred
+def collect_reports(model, X, y, use_class_weight=False, model_name=""):
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    y_true_all, y_pred_all = [], []
 
-print("正在运行Boruta特征选择...")
-boruta_selector.fit(X_np, y_np)
+    for train_idx, test_idx in skf.split(X, y):
+        X_tr, X_te = X[train_idx], X[test_idx]
+        y_tr, y_te = y[train_idx], y[test_idx]
 
-# 宽松选择：Confirmed + Weak
-selected_mask = boruta_selector.support_ | boruta_selector.support_weak_
-selected_features = X.columns[selected_mask].tolist()
-print("选中的特征数量:", len(selected_features))
+        if use_class_weight and model_name == "XGBoost":
+            weights = compute_sample_weight(class_weight="balanced", y=y_tr)
+            model.fit(X_tr, y_tr, sample_weight=weights)
+        else:
+            model.fit(X_tr, y_tr)
 
-# 提取选择后的特征
-X_selected = X_np[:, selected_mask]
+        y_pred = model.predict(X_te)
+        y_true_all.extend(y_te)
+        y_pred_all.extend(y_pred)
 
-# 划分训练测试集（保持 stratify 一致）
-X_train_sel, X_test_sel, _, _ = train_test_split(
-    X_selected, y_np, test_size=0.2, random_state=42, stratify=y
-)
+    return classification_report(y_true_all, y_pred_all, digits=3)
 
-# =================== 四个模型对比 ===================
 
-# 1. RF (原始特征)
-clf_rf_full = RandomForestClassifier(n_estimators=200, random_state=42, class_weight="balanced")
-clf_rf_full.fit(X_train_full, y_train)
-y_pred_rf_full = clf_rf_full.predict(X_test_full)
-print("\n=== 随机森林 (原始特征) ===")
-print("准确率:", accuracy_score(y_test, y_pred_rf_full))
-print("分类报告:\n", classification_report(y_test, y_pred_rf_full))
+# ---- 1. Baseline ----
+for name, model in get_models().items():
+    cv_res = cross_validate(model, X_train, y_train, cv=5, scoring=scoring)
 
-# 2. RF (Boruta特征)
-clf_rf_sel = RandomForestClassifier(n_estimators=200, random_state=42, class_weight="balanced")
-clf_rf_sel.fit(X_train_sel, y_train)
-y_pred_rf_sel = clf_rf_sel.predict(X_test_sel)
-print("\n=== 随机森林 (Boruta特征) ===")
-print("准确率:", accuracy_score(y_test, y_pred_rf_sel))
-print("分类报告:\n", classification_report(y_test, y_pred_rf_sel))
+    model.fit(X_train, y_train)
+    y_test_pred = model.predict(X_test)
+    test_acc = accuracy_score(y_test, y_test_pred)
+    test_f1 = f1_score(y_test, y_test_pred, average='macro')
+    results.append({
+        "Setting": "Baseline",
+        "Model": name,
+        "Acc_mean": np.mean(cv_res["test_accuracy"]),
+        "Acc_std": np.std(cv_res["test_accuracy"]),
+        "F1_mean": np.mean(cv_res["test_f1_macro"]),
+        "F1_std": np.std(cv_res["test_f1_macro"]),
+        "Test_Acc": test_acc,
+        "Test_F1": test_f1
+    })
+    rep = collect_reports(model, X, y, use_class_weight=False, model_name=name)
+    reports.append(("Baseline", name, rep))
 
-# 3. XGBoost (原始特征)
-clf_xgb_full = xgb.XGBClassifier(
-    n_estimators=300,
-    learning_rate=0.05,
-    max_depth=5,
-    subsample=0.8,
-    colsample_bytree=0.8,
-    random_state=42,
-    scale_pos_weight=1,
-    eval_metric="mlogloss",
-    use_label_encoder=False
-)
-clf_xgb_full.fit(X_train_full, y_train)
-y_pred_xgb_full = clf_xgb_full.predict(X_test_full)
-print("\n=== XGBoost (原始特征) ===")
-print("准确率:", accuracy_score(y_test, y_pred_xgb_full))
-print("分类报告:\n", classification_report(y_test, y_pred_xgb_full))
+# ---- 2. ClassWeight ----
+for name, model in get_models(class_weight="balanced").items():
+    if name == "XGBoost":
+        skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+        acc_scores, f1_scores = [], []
+        from sklearn.utils.class_weight import compute_sample_weight
+        for train_idx, test_idx in skf.split(X, y):
+            X_tr, X_te = X[train_idx], X[test_idx]
+            y_tr, y_te = y[train_idx], y[test_idx]
+            weights = compute_sample_weight(class_weight="balanced", y=y_tr)
+            model.fit(X_tr, y_tr, sample_weight=weights)
+            y_pred = model.predict(X_te)
+            acc_scores.append(accuracy_score(y_te, y_pred))
+            f1_scores.append(f1_score(y_te, y_pred, average="macro"))
 
-# 4. XGBoost (Boruta特征)
-clf_xgb_sel = xgb.XGBClassifier(
-    n_estimators=300,
-    learning_rate=0.05,
-    max_depth=5,
-    subsample=0.8,
-    colsample_bytree=0.8,
-    random_state=42,
-    scale_pos_weight=1,
-    eval_metric="mlogloss",
-    use_label_encoder=False
-)
-clf_xgb_sel.fit(X_train_sel, y_train)
-y_pred_xgb_sel = clf_xgb_sel.predict(X_test_sel)
-print("\n=== XGBoost (Boruta特征) ===")
-print("准确率:", accuracy_score(y_test, y_pred_xgb_sel))
-print("分类报告:\n", classification_report(y_test, y_pred_xgb_sel))
+            model.fit(X_train, y_train)
+            y_test_pred = model.predict(X_test)
+            test_acc = accuracy_score(y_test, y_test_pred)
+            test_f1 = f1_score(y_test, y_test_pred, average='macro')
+        results.append({
+            "Setting": "ClassWeight",
+            "Model": name,
+            "Acc_mean": np.mean(acc_scores),
+            "Acc_std": np.std(acc_scores),
+            "F1_mean": np.mean(f1_scores),
+            "F1_std": np.std(f1_scores),
+            "Test_Acc": test_acc,
+            "Test_F1": test_f1
+        })
+        rep = collect_reports(model, X, y, use_class_weight=True, model_name=name)
+        reports.append(("ClassWeight", name, rep))
+    else:
+        cv_res = cross_validate(model, X, y, cv=5, scoring=scoring)
+
+        model.fit(X_train, y_train)
+        y_test_pred = model.predict(X_test)
+        test_acc = accuracy_score(y_test, y_test_pred)
+        test_f1 = f1_score(y_test, y_test_pred, average='macro')
+        results.append({
+            "Setting": "ClassWeight",
+            "Model": name,
+            "Acc_mean": np.mean(cv_res["test_accuracy"]),
+            "Acc_std": np.std(cv_res["test_accuracy"]),
+            "F1_mean": np.mean(cv_res["test_f1_macro"]),
+            "F1_std": np.std(cv_res["test_f1_macro"]),
+            "Test_Acc": test_acc,
+            "Test_F1": test_f1
+        })
+        rep = collect_reports(model, X, y, use_class_weight=True, model_name=name)
+        reports.append(("ClassWeight", name, rep))
+
+# ---- 3. SMOTE ----
+smote = SMOTE(random_state=42)
+n_splits = 5
+
+for name, model in get_models().items():
+    fold_acc = []
+    fold_f1 = []
+
+    for i in range(n_splits):
+        X_train_inner, X_val, y_train_inner, y_val = train_test_split(
+            X_train, y_train, test_size=0.2, stratify=y_train, random_state=42 + i)
+        X_res, y_res = smote.fit_resample(X_train_inner, y_train_inner)
+        model.fit(X_res, y_res)
+        y_val_pred = model.predict(X_val)
+        fold_acc.append(accuracy_score(y_val, y_val_pred))
+        fold_f1.append(f1_score(y_val, y_val_pred, average='macro'))
+
+    X_res_full, y_res_full = smote.fit_resample(X_train, y_train)
+    model.fit(X_res_full, y_res_full)
+    y_test_pred = model.predict(X_test)
+
+    test_acc = accuracy_score(y_test, y_test_pred)
+    test_f1 = f1_score(y_test, y_test_pred, average='macro')
+
+    results.append({
+        "Setting": "SMOTE",
+        "Model": name,
+        "Acc_mean": np.mean(fold_acc),
+        "F1_mean": np.mean(fold_f1),
+        "Acc_std": np.std(fold_acc),
+        "F1_std": np.std(fold_f1),
+        "Test_Acc": test_acc,
+        "Test_F1": test_f1
+    })
+    rep = collect_reports(model, X, y, use_class_weight=False, model_name=name)
+    reports.append(("SMOTE", name, rep))
+
+# ========== 汇总 ==========
+df_results = pd.DataFrame(results)
+print("=== 结果对比表 ===")
+print(df_results.to_string())
+
+print("\n=== 各模型 classification report ===")
+for setting, model, rep in reports:
+    print(f"\n--- {setting} | {model} ---")
+    print(rep)
