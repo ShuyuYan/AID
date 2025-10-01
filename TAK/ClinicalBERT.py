@@ -24,7 +24,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 max_length = 384
 batch_size = 16
-epochs = 200
+epochs = 20
 learning_rate = 2e-5
 
 # ======= 1. 读取数据 =======

@@ -10,7 +10,7 @@ from imblearn.over_sampling import SMOTE
 import xgboost as xgb
 
 # ========== 数据读取 ==========
-df = pd.read_excel(os.path.expanduser('~/Data/AID/all.xlsx'), sheet_name='effect1')
+df = pd.read_excel(os.path.expanduser('~/Data/AID/all.xlsx'), sheet_name='data')
 target_col = df.columns[-3]
 
 # 特征 + 标签
