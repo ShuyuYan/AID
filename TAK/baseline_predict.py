@@ -5,9 +5,14 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.model_selection import StratifiedKFold, cross_validate, train_test_split
 from sklearn.metrics import classification_report, accuracy_score, f1_score, make_scorer
-from sklearn.utils.class_weight import compute_sample_weight
 from imblearn.over_sampling import SMOTE
 import xgboost as xgb
+"""
+筛选基线数据中的数值型数据，使用随机森林和XGBoost两种模型预测患者治疗方案
+尝试ClassWeight和SMOTE两种增强方法缓解类不平衡问题
+XGBoost+ClassWeight方法效果最好
+"""
+
 
 # ========== 数据读取 ==========
 df = pd.read_excel(os.path.expanduser('~/Data/AID/all.xlsx'), sheet_name='data')

@@ -10,6 +10,10 @@ import os
 import datetime
 from tqdm import tqdm
 from sklearn.metrics import accuracy_score, classification_report
+"""
+结合Baseline和影像报告双模态数据，使用中期融合方式预测患者治疗方案
+"""
+
 
 # ========== 参数设置 ==========
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
