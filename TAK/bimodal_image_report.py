@@ -13,7 +13,6 @@ from sklearn.metrics import accuracy_score, classification_report
 from utils.TADataset import TADataset
 
 
-
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     bert_path = "/home/yanshuyu/Data/AID/TAK/Bio_ClinicalBERT"
@@ -37,9 +36,8 @@ if __name__ == "__main__":
     num_labels = len(label_encoder.classes_)
 
     data = TADataset(df, report, X, y, tokenizer, max_length)
-    dataloader = DataLoader(data, batch_size=1, shuffle=False)
+    dataloader = DataLoader(data, batch_size=8, shuffle=False)
 
     for batch in dataloader:
-        # print(batch['tabular'])
-        print(batch['report'], batch['label'])
+        print(batch['TA'], batch['head'].shape, batch['thorax'].shape)
 

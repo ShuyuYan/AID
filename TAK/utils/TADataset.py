@@ -4,6 +4,38 @@ import torch
 from torch.utils.data import Dataset
 
 
+def load_nii(path, target_size=(256, 256), num_slices=3):
+    if path == '0':
+        return torch.zeros((num_slices, *target_size), dtype=torch.float32)
+
+    try:
+        img = nib.load(path).get_fdata()
+        img = (img - img.min()) / (img.max() - img.min() + 1e-8) * 255
+        img = torch.from_numpy(img).float()
+        # (H, W) → (H, W, 1)
+        if img.ndim == 2:
+            img = img.unsqueeze(-1)
+        # 选取/补齐到 num_slices 张
+        D = img.shape[-1]
+        if D >= num_slices:
+            mid = D // 2
+            start = max(0, mid - num_slices // 2)
+            img = img[:, :, start:start + num_slices]
+        else:
+            last = img[:, :, -1:]
+            repeat = last.repeat(1, 1, num_slices - D)
+            img = torch.cat([img, repeat], dim=-1)
+
+        # (H, W, num_slices) → (num_slices, H, W)
+        img = img.permute(2, 0, 1)
+        img = F_tv.resize(img, target_size)
+        return img
+
+    except Exception as e:
+        # print(f"[Warning] Load failed: {path}")
+        return torch.zeros((num_slices, *target_size), dtype=torch.float32)
+
+
 class TADataset(Dataset):
     def __init__(self, df, report, tabular, label, tokenizer, max_length):
         self.df = df.reset_index(drop=True)
@@ -31,16 +63,14 @@ class TADataset(Dataset):
         attention_mask = encoding['attention_mask'].squeeze(0)
 
         row = self.df.iloc[idx]
-        head_path = str(row["head"])
-        if head_path == '0':
-            head = torch.zeros(1, dtype=torch.float32)
-        else:
-            head = nib.load(head_path).get_fdata()
-            head = (head - head.min()) / (head.max() - head.min()) * 255
-            head = torch.from_numpy(head).float()
+        TA = str(row['TA'])
+        head = load_nii(row['head'], (224, 224), 3)
+        thorax = load_nii(row['thorax'], (224, 224), 3)
 
         return {
-            "image": head,
+            "TA": TA,
+            "head": head,
+            "thorax": thorax,
             "report": report,
             "input_ids": input_ids,
             "attention_mask": attention_mask,
