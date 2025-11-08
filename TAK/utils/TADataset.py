@@ -29,6 +29,9 @@ def load_nii(path, target_size=(256, 256), num_slices=3):
         # (H, W, num_slices) → (num_slices, H, W)
         img = img.permute(2, 0, 1)
         img = F_tv.resize(img, target_size)
+        # 确保img为三通道图像
+        if img.shape[0] == 1:
+            img = img.repeat(3, 1, 1)
         return img
 
     except Exception as e:
@@ -37,10 +40,10 @@ def load_nii(path, target_size=(256, 256), num_slices=3):
 
 
 class TADataset(Dataset):
-    def __init__(self, df, report, tabular, label, tokenizer, max_length):
+    def __init__(self, df, report, tab, label, tokenizer, max_length):
         self.df = df.reset_index(drop=True)
         self.report = report
-        self.tabular = tabular
+        self.tab = tab
         self.label = label
         self.tokenizer = tokenizer
         self.max_length = max_length
@@ -50,7 +53,7 @@ class TADataset(Dataset):
 
     def __getitem__(self, idx):
         report = self.report[idx]
-        tabular = torch.tensor(self.tabular[idx], dtype=torch.float32)
+        tab = torch.tensor(self.tab[idx], dtype=torch.float32)
         label = torch.tensor(self.label[idx], dtype=torch.long)
         encoding = self.tokenizer(
             report,
@@ -72,8 +75,10 @@ class TADataset(Dataset):
             "head": head,
             "thorax": thorax,
             "report": report,
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "tabular": tabular,
+            "text_tokens": {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask
+            },
+            "tab": tab,
             "label": label
         }
