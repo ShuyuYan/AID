@@ -1,49 +1,21 @@
 import torch
 import pandas as pd
 from torch import nn
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, Subset
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.impute import SimpleImputer
 from transformers import AutoTokenizer, AutoModel
+from torch.utils.tensorboard import SummaryWriter
 import os
 import datetime
 from tqdm import tqdm
 from sklearn.metrics import accuracy_score, classification_report
+from utils.TADataset import TADataset
+from utils.tools import *
 """
 结合Baseline和影像报告双模态数据，使用中期融合方式预测患者治疗方案
 """
-
-
-class MultiModalDataset(Dataset):
-    def __init__(self, texts, tabular_data, labels, tokenizer, max_length):
-        self.texts = texts
-        self.tabular_data = tabular_data
-        self.labels = labels
-        self.tokenizer = tokenizer
-        self.max_length = max_length
-
-    def __len__(self):
-        return len(self.labels)
-
-    def __getitem__(self, idx):
-        text = self.texts[idx]
-        label = self.labels[idx]
-        tabular_feats = torch.tensor(self.tabular_data[idx], dtype=torch.float32)
-
-        encoding = self.tokenizer(
-            text,
-            padding='max_length',
-            truncation=True,
-            max_length=self.max_length,
-            return_tensors='pt'
-        )
-        return {
-            'input_ids': encoding['input_ids'].squeeze(),
-            'attention_mask': encoding['attention_mask'].squeeze(),
-            'tabular_feats': tabular_feats,
-            'label': torch.tensor(label, dtype=torch.long)
-        }
 
 
 class MultiModalClassifier(nn.Module):
@@ -103,7 +75,6 @@ def evaluate_saved_model(model, model_path, test_loader, label_encoder, device):
     加载保存的模型权重，并在测试集上输出分类报告
     """
     print(f"\n=== 加载模型权重: {model_path} ===")
-    # 加载权重
     state_dict = torch.load(model_path, map_location=device)
     model.load_state_dict(state_dict)
     model.to(device)
@@ -113,16 +84,16 @@ def evaluate_saved_model(model, model_path, test_loader, label_encoder, device):
 
     with torch.no_grad():
         for batch in tqdm(test_loader, desc="Evaluating"):
-            input_ids = batch['input_ids'].to(device)
-            attention_mask = batch['attention_mask'].to(device)
-            tabular_feats = batch['tabular_feats'].to(device)
-            labels = batch['label'].to(device)
+            input_ids = batch['text_tokens']['input_ids'].to(device)
+            attention_mask = batch['text_tokens']['attention_mask'].to(device)
+            tab = batch['tab'].to(device)
+            label = batch['label'].to(device)
 
-            logits = model(input_ids, attention_mask, tabular_feats)
+            logits = model(input_ids, attention_mask, tab)
             predictions = torch.argmax(logits, dim=1)
 
             preds.extend(predictions.cpu().numpy())
-            true_labels.extend(labels.cpu().numpy())
+            true_labels.extend(label.cpu().numpy())
 
     # 输出结果
     acc = accuracy_score(true_labels, preds)
@@ -141,50 +112,55 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     bert_path = "/home/yanshuyu/Data/AID/TAK/Bio_ClinicalBERT"
     excel_path = os.path.expanduser('~/Data/AID/all.xlsx')
-    batch_size = 16
-    epochs = 1000
-    learning_rate = 1e-5
-    max_length = 384
+    writer = SummaryWriter(log_dir="/home/yanshuyu/Data/AID/runs/bimodal_report_tab")
 
-    df_tab = pd.read_excel(excel_path, sheet_name='effect1')
-    target_col = df_tab.columns[-3]  # 标签列（倒数第三列）
-    y = df_tab[target_col].values
-    X = df_tab.select_dtypes(include=["int64", "float64"])
+    batch_size = 8
+    epochs = 1000
+    learning_rate = 1e-4
+    max_length = 384
+    best_acc = 0.60
+
+    df = pd.read_excel(excel_path, sheet_name='try')
+    target_col = df.columns[-3]
+    y = df[target_col].values
+    X = df.select_dtypes(include=["int64", "float64"])
     X = X.drop(columns=[target_col], errors="ignore")
     imputer = SimpleImputer(strategy="mean")
     X = imputer.fit_transform(X)
     scaler = StandardScaler()
     X = scaler.fit_transform(X)
+    X = pca(X, 50)
     df_text = pd.read_excel(excel_path, sheet_name='effect1')
     report_col = 'mra_report'
-    texts = df_text[report_col].astype(str).tolist()[:len(X)]
-
+    report = df_text[report_col].astype(str).tolist()[:len(X)]
     label_encoder = LabelEncoder()
     y = label_encoder.fit_transform(y)
     num_labels = len(label_encoder.classes_)
-    train_texts, test_texts, train_X, test_X, train_y, test_y = train_test_split(
-        texts, X, y, test_size=0.2, random_state=42, stratify=y
-    )
 
     tokenizer = AutoTokenizer.from_pretrained(bert_path)
-    train_dataset = MultiModalDataset(train_texts, train_X, train_y, tokenizer, max_length)
-    test_dataset = MultiModalDataset(test_texts, test_X, test_y, tokenizer, max_length)
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size)
-
+    data = TADataset(df, report, X, y, tokenizer, max_length)
+    train_idx, val_idx = train_test_split(
+        range(len(df)),
+        test_size=0.2,
+        random_state=42,
+        stratify=y
+    )
+    train_data = Subset(data, train_idx)
+    val_data = Subset(data, val_idx)
+    train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
     model = MultiModalClassifier(
         bert_path=bert_path,
-        tab_input_dim=train_X.shape[1],
+        tab_input_dim=X.shape[1],
         num_labels=num_labels
     ).to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
     criterion = nn.CrossEntropyLoss()
 
-    # 加载预训练模型
+    # # 加载预训练模型
     # model_path = "/home/yanshuyu/Data/AID/TAK/best_model/bimodal_acc0.6316_695550.pt"
-    # evaluate_saved_model(model, model_path, test_loader, label_encoder, device)
-    # input()
+    # evaluate_saved_model(model, model_path, val_loader, label_encoder, device)
 
     save_dir = "checkpoints"
     os.makedirs(save_dir, exist_ok=True)
@@ -194,37 +170,43 @@ if __name__ == "__main__":
         model.train()
         total_loss = 0
         for batch in tqdm(train_loader, desc=f"Epoch {epoch + 1}/{epochs}"):
-            input_ids = batch['input_ids'].to(device)
-            attention_mask = batch['attention_mask'].to(device)
-            tabular_feats = batch['tabular_feats'].to(device)
-            labels = batch['label'].to(device)
+            input_ids = batch['text_tokens']['input_ids'].to(device)
+            attention_mask = batch['text_tokens']['attention_mask'].to(device)
+            tab = batch['tab'].to(device)
+            label = batch['label'].to(device)
 
             optimizer.zero_grad()
-            logits = model(input_ids, attention_mask, tabular_feats)
-            loss = criterion(logits, labels)
+            logits = model(input_ids, attention_mask, tab)
+            loss = criterion(logits, label)
             loss.backward()
             optimizer.step()
 
             total_loss += loss.item()
 
         avg_loss = total_loss / len(train_loader)
+        writer.add_scalar('Train Loss', avg_loss, epoch)
         print(f"Epoch {epoch + 1}/{epochs} | Train Loss: {avg_loss:.4f}")
 
         model.eval()
+        val_loss = 0
         preds, true_labels = [], []
         with torch.no_grad():
-            for batch in test_loader:
-                input_ids = batch['input_ids'].to(device)
-                attention_mask = batch['attention_mask'].to(device)
-                tabular_feats = batch['tabular_feats'].to(device)
-                labels = batch['label'].to(device)
+            for batch in val_loader:
+                input_ids = batch['text_tokens']['input_ids'].to(device)
+                attention_mask = batch['text_tokens']['attention_mask'].to(device)
+                tab = batch['tab'].to(device)
+                label = batch['label'].to(device)
 
-                logits = model(input_ids, attention_mask, tabular_feats)
+                logits = model(input_ids, attention_mask, tab)
                 predictions = torch.argmax(logits, dim=1)
                 preds.extend(predictions.cpu().numpy())
-                true_labels.extend(labels.cpu().numpy())
+                true_labels.extend(label.cpu().numpy())
+                loss = criterion(logits, label)
+                val_loss += loss.item()
 
         acc = accuracy_score(true_labels, preds)
+        writer.add_scalar('Val Loss', val_loss, epoch)
+        writer.add_scalar('Val Acc', acc, epoch)
         print(f"Validation Accuracy: {acc:.4f}")
         print(classification_report(
             true_labels, preds,
@@ -232,7 +214,8 @@ if __name__ == "__main__":
             zero_division=0
         ))
 
-        if acc > 0.5895:
-            save_path = os.path.join(save_dir, f"acc{acc:.4f}_epoch{epoch + 1}_{timestamp}.pt")
+        if acc > best_acc:
+            best_acc = acc
+            save_path = os.path.join(save_dir, f"pca_report_tab_acc{acc:.4f}_epoch{epoch + 1}_{timestamp}.pt")
             torch.save(model.state_dict(), save_path)
             print(f"模型权重已保存至: {save_path}")
