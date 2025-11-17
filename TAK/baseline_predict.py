@@ -15,7 +15,7 @@ XGBoost+ClassWeight方法效果最好
 
 
 # ========== 数据读取 ==========
-df = pd.read_excel(os.path.expanduser('~/Data/AID/all.xlsx'), sheet_name='data')
+df = pd.read_excel(os.path.expanduser('~/Data/AID/all.xlsx'), sheet_name='effect1')
 target_col = df.columns[-3]
 
 # 特征 + 标签
@@ -181,11 +181,11 @@ for name, model in get_models().items():
     reports.append(("SMOTE", name, rep))
 
 # ========== 汇总 ==========
-df_results = pd.DataFrame(results)
-print("=== 结果对比表 ===")
-print(df_results.to_string())
-
 print("\n=== 各模型 classification report ===")
 for setting, model, rep in reports:
     print(f"\n--- {setting} | {model} ---")
     print(rep)
+
+df_results = pd.DataFrame(results)
+print("=== 结果对比表 ===")
+print(df_results.to_string())

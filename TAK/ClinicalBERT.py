@@ -18,7 +18,7 @@ warnings.filterwarnings("ignore", category=UndefinedMetricWarning)
 excel_path = os.path.expanduser('~/Data/AID/all.xlsx')
 sheet_name = 'effect1'
 report_col = 'mra_report'
-label_col = 'type（0-GC+cs，1-GC+b/ts，2-others（单GC or GC+中药/HCQ，4-上述药物均无）'
+label_col = 'type'
 bert_path = "/home/yanshuyu/Data/AID/TAK/Bio_ClinicalBERT"
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

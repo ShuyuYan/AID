@@ -25,39 +25,39 @@ class MultiModalClassifier(nn.Module):
         # BERT 模块
         self.bert = AutoModel.from_pretrained(bert_path)
         self.text_fc = nn.Sequential(
-            nn.Dropout(0.3),
-            nn.Linear(self.bert.config.hidden_size, 512),
+            nn.Dropout(0.4),
+            nn.Linear(self.bert.config.hidden_size, 256),
             nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(512, 256)
+            nn.Dropout(0.4),
+            nn.Linear(256, 128)
         )
 
         # 表格特征模块
         self.tab_fc = nn.Sequential(
-            nn.Linear(tab_input_dim, 256),
-            nn.BatchNorm1d(256),
+            nn.Linear(tab_input_dim, 64),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+
+            nn.Linear(64, 32),
+            nn.BatchNorm1d(32),
             nn.ReLU(),
             nn.Dropout(0.4),
 
-            nn.Linear(256, 128),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-
-            nn.Linear(128, 64)
+            nn.Linear(32, 16)
         )
 
         # 融合 + 分类
         self.classifier = nn.Sequential(
-            nn.Linear(256 + 64, 256),
+            nn.Linear(128 + 16, 64),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+
+            nn.Linear(64, 32),
             nn.ReLU(),
             nn.Dropout(0.4),
 
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-
-            nn.Linear(128, num_labels)
+            nn.Linear(32, num_labels)
         )
 
     def forward(self, input_ids, attention_mask, tabular_feats):
@@ -83,6 +83,7 @@ def evaluate_saved_model(model, model_path, test_loader, label_encoder, device):
     preds, true_labels = [], []
 
     with torch.no_grad():
+
         for batch in tqdm(test_loader, desc="Evaluating"):
             input_ids = batch['text_tokens']['input_ids'].to(device)
             attention_mask = batch['text_tokens']['attention_mask'].to(device)
@@ -116,12 +117,12 @@ if __name__ == "__main__":
 
     batch_size = 8
     epochs = 1000
-    learning_rate = 1e-4
+    learning_rate = 1e-5
     max_length = 384
     best_acc = 0.60
 
     df = pd.read_excel(excel_path, sheet_name='try')
-    target_col = df.columns[-3]
+    target_col = df.columns[-2]
     y = df[target_col].values
     X = df.select_dtypes(include=["int64", "float64"])
     X = X.drop(columns=[target_col], errors="ignore")
@@ -129,7 +130,6 @@ if __name__ == "__main__":
     X = imputer.fit_transform(X)
     scaler = StandardScaler()
     X = scaler.fit_transform(X)
-    X = pca(X, 50)
     df_text = pd.read_excel(excel_path, sheet_name='effect1')
     report_col = 'mra_report'
     report = df_text[report_col].astype(str).tolist()[:len(X)]
@@ -155,7 +155,7 @@ if __name__ == "__main__":
         num_labels=num_labels
     ).to(device)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-3)
     criterion = nn.CrossEntropyLoss()
 
     # # 加载预训练模型
@@ -169,6 +169,7 @@ if __name__ == "__main__":
     for epoch in range(epochs):
         model.train()
         total_loss = 0
+        preds, true_labels = [], []
         for batch in tqdm(train_loader, desc=f"Epoch {epoch + 1}/{epochs}"):
             input_ids = batch['text_tokens']['input_ids'].to(device)
             attention_mask = batch['text_tokens']['attention_mask'].to(device)
@@ -177,6 +178,9 @@ if __name__ == "__main__":
 
             optimizer.zero_grad()
             logits = model(input_ids, attention_mask, tab)
+            predictions = torch.argmax(logits, dim=1)
+            preds.extend(predictions.cpu().numpy())
+            true_labels.extend(label.cpu().numpy())
             loss = criterion(logits, label)
             loss.backward()
             optimizer.step()
@@ -184,7 +188,9 @@ if __name__ == "__main__":
             total_loss += loss.item()
 
         avg_loss = total_loss / len(train_loader)
+        acc = accuracy_score(true_labels, preds)
         writer.add_scalar('Train Loss', avg_loss, epoch)
+        writer.add_scalar('Train Acc', acc, epoch)
         print(f"Epoch {epoch + 1}/{epochs} | Train Loss: {avg_loss:.4f}")
 
         model.eval()
