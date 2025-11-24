@@ -16,7 +16,7 @@ XGBoost+ClassWeight方法效果最好
 
 # ========== 数据读取 ==========
 df = pd.read_excel(os.path.expanduser('~/Data/AID/all.xlsx'), sheet_name='effect1')
-target_col = df.columns[-3]
+target_col = df.columns[-1]
 
 # 特征 + 标签
 X = df.select_dtypes(include=["int64", "float64"])

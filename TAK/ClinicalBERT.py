@@ -75,6 +75,7 @@ test_dataset = ReportDataset(test_texts, test_labels, tokenizer, max_length)
 
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=batch_size)
+save_path = "/home/yanshuyu/Data/AID/TAK/best_model/"
 
 # ======= 4. 定义模型 =======
 class ClinicalBERTClassifier(nn.Module):
@@ -132,4 +133,7 @@ for epoch in range(epochs):
 
     acc = accuracy_score(true_labels, preds)
     print(f"Validation Accuracy: {acc:.4f}")
-    print(classification_report(true_labels, preds, target_names=label_encoder.classes_))
+    print(classification_report(true_labels, preds, target_names=label_encoder.classes_, digits=3))
+    sp = save_path + str(epoch) + '.pt'
+    torch.save(model.state_dict(), sp)
+
