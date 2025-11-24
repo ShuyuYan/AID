@@ -28,15 +28,14 @@ class ImageEncoder(nn.Module):
         else:
             raise ValueError("Unsupported backbone")
 
-        # 去掉最后的分类层
-        self.encoder = nn.Sequential(*list(model.children())[:-1])  # → [B, C, 1, 1]
+        self.encoder = nn.Sequential(*list(model.children())[:-1])
         self.fc = nn.Linear(in_features, out_dim)
 
     def forward(self, x):
         x = self.encoder(x)
         x = x.flatten(1)
         x = self.fc(x)
-        return x  # shape [B, out_dim]
+        return x
 
 
 class TabularEncoder(nn.Module):
@@ -66,10 +65,7 @@ class TabularEncoder(nn.Module):
 class GateFusion(nn.Module):
     def __init__(self, img_dim=256, tab_dim=128, hidden_dim=256):
         super().__init__()
-        # 将表格特征升维到与图像一致
         self.tab_proj = nn.Linear(tab_dim, img_dim)
-
-        # 门控网络，输出维度 = img_dim
         self.gate_fc = nn.Sequential(
             nn.Linear(img_dim * 2, hidden_dim),
             nn.ReLU(),
@@ -78,14 +74,9 @@ class GateFusion(nn.Module):
         )
 
     def forward(self, img_feat, tab_feat):
-        # tab_feat: [B, 128] → [B, 256]
         tab_feat = self.tab_proj(tab_feat)
-
-        # 拼接后做 gating
-        x = torch.cat([img_feat, tab_feat], dim=1)  # [B, 512]
-        gate = self.gate_fc(x)                     # [B, 256]
-
-        # 融合
+        x = torch.cat([img_feat, tab_feat], dim=1)
+        gate = self.gate_fc(x)
         fused = gate * img_feat + (1 - gate) * tab_feat
         return fused
 
@@ -97,22 +88,18 @@ class ImageTabularModel(nn.Module):
                  fused_dim=256):
         super().__init__()
 
-        # 1. 图像特征
         self.image_encoder = ImageEncoder(
             backbone=img_backbone,
             out_dim=img_dim
         )
 
-        # 2. 表格特征
         self.tab_encoder = TabularEncoder(
             in_dim=tab_dim,
             out_dim=tab_out_dim
         )
 
-        # 3. 融合层（核心）
         self.fusion = GateFusion(img_dim, tab_out_dim, fused_dim)
 
-        # 4. 分类头
         self.classifier = nn.Sequential(
             nn.Linear(fused_dim, 128),
             nn.ReLU(),
@@ -137,11 +124,11 @@ if __name__ == "__main__":
     writer = SummaryWriter(log_dir="/home/yanshuyu/Data/AID/runs/bimodal_image_tab")
 
     max_length = 384
-    num_epochs = 20
+    num_epochs = 200
     lr = 1e-4
 
-    df = pd.read_excel(excel_path, sheet_name='effect-1')
-    label_col = df.columns[-3]
+    df = pd.read_excel(excel_path, sheet_name='effect1')
+    label_col = df.columns[-1]
     X = df.select_dtypes(include=['int64', 'float64'])
     X = X.drop(columns=[label_col], errors='ignore')
     y = df[label_col].values
@@ -149,7 +136,8 @@ if __name__ == "__main__":
     X = imputer.fit_transform(X)
     scaler = StandardScaler()
     X = scaler.fit_transform(X)
-    report = df['mra_report'].astype(str).tolist()[:len(X)]
+
+    report = df['mra_examination_re_des_1'].astype(str).tolist()[:len(X)]
     label_encoder = LabelEncoder()
     y = label_encoder.fit_transform(y)
     num_labels = len(label_encoder.classes_)
@@ -165,19 +153,24 @@ if __name__ == "__main__":
     val_data = Subset(data, val_idx)
     train_loader = DataLoader(train_data, batch_size=4, shuffle=True)
     val_loader = DataLoader(val_data, batch_size=4, shuffle=False)
-    tab_dim = X.shape[1]  # 表格特征维度
+    tab_dim = X.shape[1]
 
     model = ImageTabularModel(
         num_labels=num_labels,
         tab_dim=tab_dim,
-        img_backbone="resnet18",  # 或 resnet50
-        img_dim=256,  # 图像特征维度
-        tab_out_dim=128,  # 表格特征维度
+        img_backbone="resnet18",
+        img_dim=256,
+        tab_out_dim=128,
         fused_dim=256
     ).to(device)
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
     scheduler = ReduceLROnPlateau(optimizer, 'min', patience=5, factor=0.5)
+
+    # ------------------------ 新增：保存最优模型 ------------------------ #
+    best_val_acc = 0
+    save_path = "/home/yanshuyu/Data/AID/TAK/best_model/best_bimodal_model.pth"  # ← 新增
 
     for epoch in range(num_epochs):
         model.train()
@@ -186,78 +179,55 @@ if __name__ == "__main__":
         for batch in tqdm(train_loader, desc=f'Epoch {epoch + 1}/{num_epochs} [Train]'):
             head = batch['head'].to(device)
             tab = batch['tab'].to(device)
-            label = batch['label'].to(device)  # 有效：0/1/2，无效：-1
+            label = batch['label'].to(device)
 
             optimizer.zero_grad()
+            logits = model(head, tab)
+            probs = torch.softmax(logits, dim=1)
 
-            # -------- Step 1: forward -------- #
-            logits = model(head, tab)  # shape [B, num_labels]
-            probs = torch.softmax(logits, dim=1)  # soft probabilities
-
-            # -------- Step 2: supervised loss (有效标签) -------- #
             mask_valid = (label != -1)
-            if mask_valid.sum() > 0:
-                loss_sup = criterion(
-                    logits[mask_valid],
-                    label[mask_valid]
-                )
-            else:
-                loss_sup = torch.tensor(0.0, device=device)
+            loss_sup = criterion(logits[mask_valid], label[mask_valid]) if mask_valid.sum() > 0 else torch.tensor(0.0)
 
-            # -------- Step 3: pseudo label for invalid samples -------- #
             mask_invalid = (label == -1)
             loss_pseudo = torch.tensor(0.0, device=device)
-            loss_consistency = torch.tensor(0.0, device=device)
 
             if mask_invalid.sum() > 0:
-                invalid_probs = probs[mask_invalid]  # [K, num_labels]
+                invalid_probs = probs[mask_invalid]
                 max_prob, pseudo_label = torch.max(invalid_probs, dim=1)
 
-                # ---- high confidence (≥0.9): use as hard label ---- #
                 mask_high = (max_prob >= 0.9)
                 if mask_high.sum() > 0:
                     loss_pseudo += criterion(
                         logits[mask_invalid][mask_high],
                         pseudo_label[mask_high]
-                    ) * 1.0  # full weight
+                    ) * 1.0
 
-                # ---- medium confidence (0.6~0.9): use soft label KL ---- #
                 mask_mid = (max_prob < 0.9) & (max_prob >= 0.6)
                 if mask_mid.sum() > 0:
                     soft_target = invalid_probs[mask_mid].detach()
                     pred = probs[mask_invalid][mask_mid]
                     loss_kl = torch.nn.KLDivLoss(reduction="batchmean")(
-                        torch.log(pred + 1e-12),
-                        soft_target
+                        torch.log(pred + 1e-12), soft_target
                     )
-                    loss_pseudo += 0.3 * loss_kl  # lower weight
+                    loss_pseudo += 0.3 * loss_kl
 
-                # ---- consistency loss: predict strong vs weak aug ---- #
-                # 需要 strong augmented head/tab，你的 dataset 若未实现，我可帮你补
-                # 这里仅示例，可先不启用
-                # logits_aug = model(head_aug, tab_aug)
-                # probs_aug = torch.softmax(logits_aug, dim=1)
-                # loss_consistency = 0.1 * KL(probs, probs_aug)
-
-            # -------- Step 4: total loss -------- #
-            loss = loss_sup + loss_pseudo + loss_consistency
+            loss = loss_sup + loss_pseudo
             loss.backward()
             optimizer.step()
-
             total_loss += loss.item()
 
-        # -------- Validation -------- #
+        # ------------------------ Validation ------------------------ #
         model.eval()
         val_loss = 0
-        correct = 0
-        total = 0
+        all_preds = []
+        all_labels = []
+
         with torch.no_grad():
             for batch in tqdm(val_loader, desc=f'Epoch {epoch + 1}/{num_epochs} [Val]'):
                 head = batch['head'].to(device)
                 tab = batch['tab'].to(device)
                 label = batch['label'].to(device)
 
-                # 只对有效标签做验证
                 mask_valid = (label != -1)
                 if mask_valid.sum() == 0:
                     continue
@@ -267,19 +237,35 @@ if __name__ == "__main__":
                 val_loss += loss.item()
 
                 pred = torch.argmax(logits[mask_valid], dim=1)
-                correct += (pred == label[mask_valid]).sum().item()
-                total += mask_valid.sum().item()
+                all_preds.extend(pred.cpu().tolist())
+                all_labels.extend(label[mask_valid].cpu().tolist())
 
         avg_train_loss = total_loss / len(train_loader)
         avg_val_loss = val_loss / len(val_loader)
-        val_acc = correct / total
+        val_acc = accuracy_score(all_labels, all_preds)
+
         writer.add_scalar('Train Loss', avg_train_loss, epoch)
         writer.add_scalar('Val Loss', avg_val_loss, epoch)
         writer.add_scalar('Val Acc', val_acc, epoch)
 
-        print(
-            f"Epoch {epoch + 1} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val Acc: {val_acc:.4f}")
+        print(f"Epoch {epoch + 1} | Train Loss: {avg_train_loss:.4f}"
+              f" | Val Loss: {avg_val_loss:.4f} | Val Acc: {val_acc:.4f}")
+
+        # ------------------------ 新增：输出 classification report ------------------------ #
+        print("\n=== Classification Report ===")
+        print(classification_report(
+            all_labels,
+            all_preds,
+            target_names=[str(c) for c in label_encoder.classes_],
+            digits=3
+        ))
+
+        # ------------------------ 新增：保存最优模型 ------------------------ #
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            torch.save(model.state_dict(), save_path)
+            print(f"🔥 Saved best model (Acc={best_val_acc:.4f}) to {save_path}")
 
         scheduler.step(avg_val_loss)
-    writer.close()
 
+    writer.close()

@@ -28,7 +28,7 @@ class MultiModalClassifier(nn.Module):
             nn.Dropout(0.4),
             nn.Linear(self.bert.config.hidden_size, 256),
             nn.ReLU(),
-            nn.Dropout(0.4),
+            nn.Dropout(0.3),
             nn.Linear(256, 128)
         )
 
@@ -37,12 +37,12 @@ class MultiModalClassifier(nn.Module):
             nn.Linear(tab_input_dim, 64),
             nn.BatchNorm1d(64),
             nn.ReLU(),
-            nn.Dropout(0.5),
+            nn.Dropout(0.4),
 
             nn.Linear(64, 32),
             nn.BatchNorm1d(32),
             nn.ReLU(),
-            nn.Dropout(0.4),
+            nn.Dropout(0.3),
 
             nn.Linear(32, 16)
         )
@@ -115,14 +115,14 @@ if __name__ == "__main__":
     excel_path = os.path.expanduser('~/Data/AID/all.xlsx')
     writer = SummaryWriter(log_dir="/home/yanshuyu/Data/AID/runs/bimodal_report_tab")
 
-    batch_size = 8
+    batch_size = 16
     epochs = 1000
-    learning_rate = 1e-5
+    learning_rate = 1e-4
     max_length = 384
-    best_acc = 0.60
+    best_acc = 0.50
 
-    df = pd.read_excel(excel_path, sheet_name='try')
-    target_col = df.columns[-2]
+    df = pd.read_excel(excel_path, sheet_name='effect1')
+    target_col = df.columns[-1]
     y = df[target_col].values
     X = df.select_dtypes(include=["int64", "float64"])
     X = X.drop(columns=[target_col], errors="ignore")
@@ -158,11 +158,7 @@ if __name__ == "__main__":
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-3)
     criterion = nn.CrossEntropyLoss()
 
-    # # 加载预训练模型
-    # model_path = "/home/yanshuyu/Data/AID/TAK/best_model/bimodal_acc0.6316_695550.pt"
-    # evaluate_saved_model(model, model_path, val_loader, label_encoder, device)
-
-    save_dir = "checkpoints"
+    save_dir = "best_model"
     os.makedirs(save_dir, exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -217,11 +213,12 @@ if __name__ == "__main__":
         print(classification_report(
             true_labels, preds,
             target_names=[str(c) for c in label_encoder.classes_],
-            zero_division=0
+            zero_division=0,
+            digits=3
         ))
 
         if acc > best_acc:
             best_acc = acc
-            save_path = os.path.join(save_dir, f"pca_report_tab_acc{acc:.4f}_epoch{epoch + 1}_{timestamp}.pt")
+            save_path = os.path.join(save_dir, f"acc{acc:.4f}_epoch{epoch + 1}.pt")
             torch.save(model.state_dict(), save_path)
             print(f"模型权重已保存至: {save_path}")
