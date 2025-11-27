@@ -73,17 +73,16 @@ class GateFusion(nn.Module):
 
 
 class ImageTabTextModel(nn.Module):
-    def __init__(self, num_labels, tab_dim, bert_path,
-                 img_backbone="resnet18", feature_dim=256, tab_out_dim=128):
+    def __init__(self, num_labels, tab_dim, bert_path, img_backbone="resnet18", feature_dim=256, tab_out_dim=128):
         super().__init__()
+
         self.image_encoder = ImageEncoder(backbone=img_backbone, out_dim=feature_dim)
         self.tab_encoder = TabularEncoder(in_dim=tab_dim, out_dim=tab_out_dim)
-        # project tab to feature_dim
         self.tab_proj = nn.Linear(tab_out_dim, feature_dim)
         self.text_encoder = TextEncoder(bert_path, out_dim=feature_dim, freeze_bert=False)
 
-        # two-stage fusion: image+tab -> then fuse with text
-        self.fusion_im_tab = GateFusion(dim_a=feature_dim, dim_b=feature_dim, hidden_dim=feature_dim)
+        self.fusion_img_img = GateFusion(dim_a=feature_dim, dim_b=feature_dim, hidden_dim=feature_dim)
+        self.fusion_img_text = GateFusion(dim_a=feature_dim, dim_b=feature_dim, hidden_dim=feature_dim)
         self.fusion_all = GateFusion(dim_a=feature_dim, dim_b=feature_dim, hidden_dim=feature_dim)
 
         self.classifier = nn.Sequential(
@@ -93,19 +92,22 @@ class ImageTabTextModel(nn.Module):
             nn.Linear(feature_dim, num_labels)
         )
 
-    def forward(self, image, tab, input_ids=None, attention_mask=None):
-        img_feat = self.image_encoder(image)          # [B, D]
-        tab_feat = self.tab_encoder(tab)              # [B, tab_out_dim]
-        tab_feat = self.tab_proj(tab_feat)            # [B, D]
-        im_tab = self.fusion_im_tab(img_feat, tab_feat)  # [B, D]
+    def forward(self, head, thorax, tab, input_ids=None, attention_mask=None):
+
+        head_feat = self.image_encoder(head)  # [B, D]
+        thorax_feat = self.image_encoder(thorax)  # [B, D]
+
+        tab_feat = self.tab_encoder(tab)  # [B, tab_out_dim]
+        tab_feat = self.tab_proj(tab_feat)  # [B, D]
+
+        img_fused = self.fusion_img_img(head_feat, thorax_feat)  # [B, D]
 
         if input_ids is None:
-            # if no text provided, use zeros
-            text_feat = torch.zeros_like(im_tab).to(im_tab.device)
+            text_feat = torch.zeros_like(img_fused).to(img_fused.device)
         else:
             text_feat = self.text_encoder(input_ids, attention_mask)  # [B, D]
+        img_text_fused = self.fusion_img_text(img_fused, text_feat)
 
-        fused = self.fusion_all(im_tab, text_feat)    # [B, D]
-        logits = self.classifier(fused)               # [B, C]
+        fused = self.fusion_all(img_text_fused, tab_feat)  # [B, D]
+        logits = self.classifier(fused)  # [B, C]
         return logits, fused
-

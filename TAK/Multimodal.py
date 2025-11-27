@@ -86,7 +86,6 @@ if __name__ == "__main__":
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
     criterion = nn.CrossEntropyLoss()
-    kl_loss_fn = nn.KLDivLoss(reduction="batchmean")
     scheduler = ReduceLROnPlateau(optimizer, 'min', patience=5, factor=0.5)
 
     for epoch in range(1, num_epochs + 1):
@@ -95,6 +94,7 @@ if __name__ == "__main__":
 
         for batch in tqdm(train_loader, desc=f'Epoch {epoch} [Train]'):
             head = batch['head'].to(device)
+            thorax = batch['thorax'].to(device)
             tab = batch['tab'].to(device).float()
             label = batch['label'].to(device)
             text_tokens = batch.get('text_tokens', None)
@@ -106,7 +106,7 @@ if __name__ == "__main__":
                 attention_mask = None
 
             optimizer.zero_grad()
-            logits, _ = model(head, tab, input_ids, attention_mask)  # [B, 3]
+            logits, _ = model(head, thorax, tab, input_ids, attention_mask)  # [B, 3]
             loss = criterion(logits, label)
 
             loss.backward()
@@ -124,6 +124,7 @@ if __name__ == "__main__":
         with torch.no_grad():
             for batch in tqdm(val_loader, desc=f'Epoch {epoch} [Val]'):
                 head = batch['head'].to(device)
+                thorax = batch['thorax'].to(device)
                 tab = batch['tab'].to(device).float()
                 label = batch['label'].to(device)
                 text_tokens = batch.get('text_tokens', None)
@@ -134,7 +135,7 @@ if __name__ == "__main__":
                     input_ids = None
                     attention_mask = None
 
-                logits, _ = model(head, tab, input_ids, attention_mask)
+                logits, _ = model(head, thorax, tab, input_ids, attention_mask)
                 loss_batch = criterion(logits, label)
                 val_loss += loss_batch.item()
 
