@@ -1,5 +1,6 @@
 import torchvision.transforms.functional as F_tv
 import nibabel as nib
+import os
 import torch
 from torch.utils.data import Dataset
 
@@ -67,14 +68,20 @@ class TADataset(Dataset):
 
         row = self.df.iloc[idx]
         TA = str(row['TA'])
-        head = load_nii(row['head'], (224, 224), 3)
-        thorax = load_nii(row['thorax'], (224, 224), 3)
+        head_path = row['head']
+        thorax_path = row['thorax']
+        head = load_nii(head_path, (224, 224), 3)
+        thorax = load_nii(thorax_path, (224, 224), 3)
+        is_head_valid = 1.0 if (head_path != '0' and os.path.exists(head_path)) else 0.0
+        is_thorax_valid = 1.0 if (thorax_path != '0' and os.path.exists(thorax_path)) else 0.0
 
         return {
             "TA": TA,
             "head": head,
             "thorax": thorax,
             "report": report,
+            "head_mask": torch.tensor([is_head_valid], dtype=torch.float32),
+            "thorax_mask": torch.tensor([is_thorax_valid], dtype=torch.float32),
             "text_tokens": {
                 "input_ids": input_ids,
                 "attention_mask": attention_mask

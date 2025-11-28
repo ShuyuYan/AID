@@ -81,6 +81,9 @@ class ImageTabTextModel(nn.Module):
         self.tab_proj = nn.Linear(tab_out_dim, feature_dim)
         self.text_encoder = TextEncoder(bert_path, out_dim=feature_dim, freeze_bert=False)
 
+        self.missing_head = nn.Parameter(torch.randn(1, feature_dim))
+        self.missing_thorax = nn.Parameter(torch.randn(1, feature_dim))
+
         self.fusion_img_img = GateFusion(dim_a=feature_dim, dim_b=feature_dim, hidden_dim=feature_dim)
         self.fusion_img_text = GateFusion(dim_a=feature_dim, dim_b=feature_dim, hidden_dim=feature_dim)
         self.fusion_all = GateFusion(dim_a=feature_dim, dim_b=feature_dim, hidden_dim=feature_dim)
@@ -92,10 +95,15 @@ class ImageTabTextModel(nn.Module):
             nn.Linear(feature_dim, num_labels)
         )
 
-    def forward(self, head, thorax, tab, input_ids=None, attention_mask=None):
+    def forward(self, head, thorax, tab, input_ids=None, attention_mask=None,
+                head_mask=None, thorax_mask=None):
 
         head_feat = self.image_encoder(head)  # [B, D]
         thorax_feat = self.image_encoder(thorax)  # [B, D]
+        if head_mask is not None:
+            head_feat = head_feat * head_mask + self.missing_head * (1 - head_mask)
+        if thorax_mask is not None:
+            thorax_feat = thorax_feat * thorax_mask + self.missing_thorax * (1 - thorax_mask)
 
         tab_feat = self.tab_encoder(tab)  # [B, tab_out_dim]
         tab_feat = self.tab_proj(tab_feat)  # [B, D]

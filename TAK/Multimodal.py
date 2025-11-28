@@ -42,6 +42,7 @@ if __name__ == "__main__":
     lr = 2e-4
     num_epochs = 30
     best_val_acc = 0.9
+    mra_drop_prob = 0.25
 
     X = df.select_dtypes(include=['int64', 'float64'])
     X = X.drop(columns=[label_col], errors='ignore')
@@ -119,14 +120,19 @@ if __name__ == "__main__":
             else:
                 input_ids = None
                 attention_mask = None
+            head_mask = batch['head_mask'].to(device)
+            thorax_mask = batch['thorax_mask'].to(device)
 
             optimizer.zero_grad()
-            logits, _ = model(head, thorax, tab, input_ids, attention_mask)  # [B, 3]
-            loss = criterion(logits, label)
+            rand_head_mask = (torch.rand(head.size(0), 1, device=device) > mra_drop_prob).float()
+            rand_thorax_mask = (torch.rand(head.size(0), 1, device=device) > mra_drop_prob).float()
+            head_mask = head_mask * rand_head_mask
+            thorax_mask = thorax_mask * rand_thorax_mask
 
+            logits, _ = model(head, thorax, tab, input_ids, attention_mask, head_mask, thorax_mask)  # [B, 3]
+            loss = criterion(logits, label)
             loss.backward()
             optimizer.step()
-
             total_loss += loss.item()
 
         model.eval()
@@ -149,8 +155,10 @@ if __name__ == "__main__":
                 else:
                     input_ids = None
                     attention_mask = None
+                head_mask = batch['head_mask'].to(device)
+                thorax_mask = batch['thorax_mask'].to(device)
 
-                logits, _ = model(head, thorax, tab, input_ids, attention_mask)
+                logits, _ = model(head, thorax, tab, input_ids, attention_mask, head_mask, thorax_mask)
                 loss_batch = criterion(logits, label)
                 val_loss += loss_batch.item()
 
