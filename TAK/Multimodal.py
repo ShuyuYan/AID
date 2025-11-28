@@ -41,7 +41,7 @@ if __name__ == "__main__":
     num_workers = 4
     lr = 2e-4
     num_epochs = 30
-    best_val_acc = 0.85
+    best_val_acc = 0.9
 
     X = df.select_dtypes(include=['int64', 'float64'])
     X = X.drop(columns=[label_col], errors='ignore')
@@ -52,7 +52,7 @@ if __name__ == "__main__":
     report = df['mra_examination_re_des_1'].astype(str).tolist()[:len(X_np)]
     labels_series = df[label_col].astype(int)
 
-    y_for_dataset = labels_series.values  # contains -1 for unlabeled
+    y_for_dataset = labels_series.values
     data = TADataset(df, report, X_np, y_for_dataset, tokenizer, max_length)
 
     all_indices = df.index.to_numpy()
@@ -84,9 +84,24 @@ if __name__ == "__main__":
         tab_out_dim=128
     ).to(device)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
+    param_groups = [
+        # A. 图像编码器 (ResNet) - 最小的LR
+        {'params': model.image_encoder.parameters(), 'lr': 0.01 * lr},
+
+        # B. 文本编码器 (BERT) - 适中的LR
+        {'params': model.text_encoder.bert.parameters(), 'lr': 0.1 * lr},
+        {'params': model.text_encoder.proj.parameters(), 'lr': lr},  # 投影层是新层，用基准LR
+
+        # C. 新层/融合层/分类器 - 基础LR (用于快速学习)
+        {'params': model.tab_encoder.parameters(), 'lr': lr},
+        {'params': model.fusion_img_img.parameters(), 'lr': lr},
+        {'params': model.fusion_img_text.parameters(), 'lr': lr},
+        {'params': model.fusion_all.parameters(), 'lr': lr},
+        {'params': model.classifier.parameters(), 'lr': lr},
+    ]
+    optimizer = torch.optim.AdamW(param_groups, lr=lr, weight_decay=1e-2)
     criterion = nn.CrossEntropyLoss()
-    scheduler = ReduceLROnPlateau(optimizer, 'min', patience=5, factor=0.5)
+    scheduler = ReduceLROnPlateau(optimizer, 'min', patience=3, factor=0.5)
 
     for epoch in range(1, num_epochs + 1):
         model.train()
@@ -161,7 +176,7 @@ if __name__ == "__main__":
         print(f"Epoch {epoch} | Train Loss: {avg_train_loss:.4f} |"
               f" Val Loss: {avg_val_loss:.4f} | Val Acc: {val_acc:.4f}")
 
-        if val_acc > best_val_acc:
+        if val_acc >= best_val_acc:
             best_val_acc = val_acc
             print("\n=========== Classification Report ===========")
             print(classification_report(all_labels, all_preds, labels=[0, 1, 2], digits=3))
