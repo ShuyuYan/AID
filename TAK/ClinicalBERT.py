@@ -16,7 +16,7 @@ warnings.filterwarnings("ignore", category=UndefinedMetricWarning)
 
 # ======= 参数设置 =======
 excel_path = os.path.expanduser('~/Data/AID/all.xlsx')
-sheet_name = 'effect1'
+sheet_name = '714'
 report_col = 'mra_report'
 label_col = 'type'
 bert_path = "/home/yanshuyu/Data/AID/TAK/Bio_ClinicalBERT"
@@ -25,7 +25,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 max_length = 384
 batch_size = 16
 epochs = 20
-learning_rate = 2e-5
+learning_rate = 2e-6
 
 # ======= 1. 读取数据 =======
 df = pd.read_excel(excel_path, sheet_name=sheet_name)
@@ -75,7 +75,7 @@ test_dataset = ReportDataset(test_texts, test_labels, tokenizer, max_length)
 
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=batch_size)
-save_path = "/home/yanshuyu/Data/AID/TAK/best_model/"
+save_path = "/home/yanshuyu/Data/AID/TAK/checkpoints/"
 
 # ======= 4. 定义模型 =======
 class ClinicalBERTClassifier(nn.Module):
