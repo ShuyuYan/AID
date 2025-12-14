@@ -1,25 +1,11 @@
-from transformers import AutoTokenizer, AutoModel
 import os
-import copy
-import datetime
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import pandas as pd
-from torch.utils.data import DataLoader, Subset
-from sklearn.preprocessing import LabelEncoder, StandardScaler
-from sklearn.model_selection import train_test_split
-from sklearn.impute import SimpleImputer
-from sklearn.metrics import classification_report
-from transformers import AutoTokenizer, AutoModel
-import torchvision.models as models
-from torch.optim.lr_scheduler import ReduceLROnPlateau
-from torch.utils.tensorboard import SummaryWriter
-from tqdm import tqdm
-from utils.TADataset import TADataset
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from utils.model import *
+"""
+加载report模型权重，提取BERT模型的注意力权重，将模型关注点可视化
+"""
+
 
 os.environ['HTTP_PROXY'] = "http://127.0.0.1:7890"
 os.environ['HTTPS_PROXY'] = "http://127.0.0.1:7890"
