@@ -14,16 +14,14 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 tokenizer = AutoTokenizer.from_pretrained("medicalai/ClinicalBERT")
 model = AutoModel.from_pretrained("medicalai/ClinicalBERT").to(device)
-save_path = "/home/yanshuyu/Data/AID/TAK/checkpoints/best_model.pt"
+save_path = "/home/yanshuyu/Data/AID/TAK/best_model/BERT_best_model.pt"
 
 
 # 加载最佳权重
 model.load_state_dict(torch.load(save_path))
 model.eval()
 
-new_report = (""
-              "左侧锁骨下动脉及两侧椎动脉近段轻中度狭窄，中远段管腔显示可；右锁骨下动脉近段局部稍扩张。双侧肾动脉起始段狭窄。右侧头臂干、两侧颈总动脉显影可，腹主动脉局部轻度狭窄，所示胸主动脉未见明显局限性管腔狭窄或扩展，腹腔干显示可。  影像学 诊断: 高安病：左侧锁骨下动脉及两侧椎动脉近段轻度狭窄；右锁骨下动脉近段局部瘤样扩张；双侧肾动脉起始段狭窄；腹主动脉局部轻度狭窄，请结合临床。"
-              "")
+new_report = ("The visualized cervical, thoracic, and abdominal aorta are well visualized with normal course of the major arteries and their branches; bilateral subclavian arteries show mild wall thickening with focal mild luminal stenosis; the proximal segments of bilateral common carotid arteries show wall thickening without significant luminal narrowing; the remaining arteries show no significant stenosis, filling defects, or dilatation, and no other abnormalities are observed. Imaging diagnosis: focal mild stenosis of bilateral subclavian arteries and wall thickening of the proximal segments of bilateral common carotid arteries.")
 
 # 分词并转换为张量
 tokens = tokenizer(new_report, return_tensors="pt")
@@ -45,34 +43,88 @@ token_attention = last_layer_attentions[0] / last_layer_attentions[0].sum()
 # 映射 token id 到文字
 tokens_decoded = tokenizer.convert_ids_to_tokens(input_ids[0])
 
+
 # 创建词的颜色映射函数
 def attention_color(att_score):
     """
     根据注意力得分返回颜色 (红色高关注、蓝色低关注)
     """
     cmap = plt.cm.RdBu_r  # 红蓝渐变色
-    norm = mcolors.Normalize(vmin=0, vmax=max(token_attention)/10)  # 归一化
+    # 注意：聚合后的分数可能会变化，这里动态调整vmax可以让颜色分布更合理
+    norm = mcolors.Normalize(vmin=0, vmax=max(token_attention) / 8)
     rgba = cmap(norm(att_score))
-    return '#{:02x}{:02x}{:02x}'.format(int(rgba[0]*255), int(rgba[1]*255), int(rgba[2]*255))
+    return '#{:02x}{:02x}{:02x}'.format(int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255))
 
 
-filtered_tokens = []
-filtered_attentions = []
+# --- 修改核心逻辑：合并 Subwords 并聚合注意力分数 ---
+
+merged_words = []
+merged_scores = []
+
+# 用于临时存储当前正在合并的词和分数
+current_word_parts = []
+current_scores = []
+
+# 1. 重建单词并聚合注意力权重 (解决 ## 符号问题)
+words = []
+word_attentions = []
+
 for token, score in zip(tokens_decoded, token_attention):
-    if token not in ["[CLS ]", "[SE P]"]:
-        filtered_tokens.append(token)
-        filtered_attentions.append(score)
-# 可视化注意力
+    # 跳过特殊字符
+    if token in ["[CLS]", "[SEP]", "[PAD]"]:
+        continue
+
+    # 如果是 subword (以 ## 开头)，合并到前一个词
+    if token.startswith("##"):
+        if words:
+            words[-1] += token[2:]  # 拼接文本
+            word_attentions[-1] += score  # 累加权重 (表示整个词的总关注度)
+    else:
+        # 新词
+        words.append(token)
+        word_attentions.append(score)
+
+# 2. 根据阈值进行二值化着色 (解决颜色太淡问题)
+# 阈值设置：您可以根据输出结果调整这个值。
+# 建议值：所有权重的平均值，或者 1/N (N为词数)，例如 0.02 - 0.05 之间
+threshold = 0.008
+
 text_colored = []
-for token, score in zip(filtered_tokens, token_attention):
-    color = attention_color(score)
-    colored_token = f'<span style="color:{color}">{token}</span>'
+for word, score in zip(words, word_attentions):
+    if score > threshold:
+        # 大于阈值：红色，加粗
+        color = "red"
+        font_weight = "bold"
+    else:
+        # 小于阈值：蓝色，正常粗细
+        color = "blue"
+        font_weight = "normal"
+
+    # 生成 HTML span 标签
+    colored_token = f'<span style="color:{color}; font-weight:{font_weight}; margin-right: 4px;">{word}</span>'
     text_colored.append(colored_token)
 
-# 将结果拼接成一段 HTML
-from IPython.core.display import display, HTML
-
+# 1. 拼接文本
 html_content = " ".join(text_colored)
+
+# 2. 简单的标点符号空格处理 (保持原有逻辑)
+html_content = html_content.replace(" ,", ",").replace(" .", ".").replace(" ;", ";").replace(" :", ":")
+
+# 3. 写入文件，重点是修改 div 的 style
 with open("attention_visualization.html", "w", encoding="utf-8") as f:
-    f.write(f"<div style='font-size:16px;font-family:Arial;'>{html_content}</div>")
+    f.write(f"""
+    <div style='
+        font-size: 16px; 
+        font-family: Arial, sans-serif; 
+        line-height: 1.6; 
+        white-space: normal;      /* 强制允许自动换行 */
+        word-wrap: break-word;    /* 允许在长单词内部换行，防止溢出 */
+        overflow-wrap: break-word;/* 标准写法，同上 */
+        max-width: 1000px;        /* 限制最大宽度，避免太宽难以阅读 */
+        margin: 20px;             /*以此留出一些边距 */
+    '>
+        {html_content}
+    </div>
+    """)
+
 print("HTML 可视化结果保存为: attention_visualization.html")
