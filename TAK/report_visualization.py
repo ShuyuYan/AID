@@ -2,27 +2,25 @@ import os
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from utils.model import *
+from IPython.core.display import display, HTML
+
 """
 加载report模型权重，提取BERT模型的注意力权重，将模型关注点可视化
 """
-
 
 os.environ['HTTP_PROXY'] = "http://127.0.0.1:7890"
 os.environ['HTTPS_PROXY'] = "http://127.0.0.1:7890"
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-
 tokenizer = AutoTokenizer.from_pretrained("medicalai/ClinicalBERT")
 model = AutoModel.from_pretrained("medicalai/ClinicalBERT").to(device)
 save_path = "/home/yanshuyu/Data/AID/TAK/best_model/BERT_best_model.pt"
-
 
 # 加载最佳权重
 model.load_state_dict(torch.load(save_path))
 model.eval()
 
-new_report = ("The visualized cervical, thoracic, and abdominal aorta are well visualized with normal course of the major arteries and their branches; bilateral subclavian arteries show mild wall thickening with focal mild luminal stenosis; the proximal segments of bilateral common carotid arteries show wall thickening without significant luminal narrowing; the remaining arteries show no significant stenosis, filling defects, or dilatation, and no other abnormalities are observed. Imaging diagnosis: focal mild stenosis of bilateral subclavian arteries and wall thickening of the proximal segments of bilateral common carotid arteries.")
-
+new_report = input()
 # 分词并转换为张量
 tokens = tokenizer(new_report, return_tensors="pt")
 input_ids = tokens["input_ids"].to(device)
@@ -47,16 +45,20 @@ tokens_decoded = tokenizer.convert_ids_to_tokens(input_ids[0])
 # 创建词的颜色映射函数
 def attention_color(att_score):
     """
-    根据注意力得分返回颜色 (红色高关注、蓝色低关注)
+    根据注意力得分返回颜色
+    使用 'nipy_spectral_r' colormap 来匹配图片中的彩虹色：
+    Low (Red) -> Yellow -> Green -> Blue -> High (Purple)
     """
-    cmap = plt.cm.RdBu_r  # 红蓝渐变色
-    # 注意：聚合后的分数可能会变化，这里动态调整vmax可以让颜色分布更合理
-    norm = mcolors.Normalize(vmin=0, vmax=max(token_attention) / 8)
+    cmap = plt.cm.rainbow_r
+
+    # 动态调整归一化范围
+    # 这里的 vmax 控制灵敏度，除以5是为了让高关注区域更明显地进入紫色/蓝色区
+    norm = mcolors.Normalize(vmin=0, vmax=max(token_attention) / 10)
     rgba = cmap(norm(att_score))
     return '#{:02x}{:02x}{:02x}'.format(int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255))
 
 
-# --- 修改核心逻辑：合并 Subwords 并聚合注意力分数 ---
+# --- 核心逻辑：合并 Subwords 并聚合注意力分数 ---
 
 merged_words = []
 merged_scores = []
@@ -65,66 +67,91 @@ merged_scores = []
 current_word_parts = []
 current_scores = []
 
-# 1. 重建单词并聚合注意力权重 (解决 ## 符号问题)
-words = []
-word_attentions = []
-
 for token, score in zip(tokens_decoded, token_attention):
     # 跳过特殊字符
     if token in ["[CLS]", "[SEP]", "[PAD]"]:
         continue
 
-    # 如果是 subword (以 ## 开头)，合并到前一个词
+    # 如果是子词（以 ## 开头）
     if token.startswith("##"):
-        if words:
-            words[-1] += token[2:]  # 拼接文本
-            word_attentions[-1] += score  # 累加权重 (表示整个词的总关注度)
+        current_word_parts.append(token[2:])  # 去掉 ## 后追加
+        current_scores.append(score)
     else:
-        # 新词
-        words.append(token)
-        word_attentions.append(score)
+        # 如果之前缓存了词，先结算上一个词
+        if current_word_parts:
+            merged_words.append("".join(current_word_parts))
+            # 对注意力分数取平均值
+            merged_scores.append(sum(current_scores) / len(current_scores))
 
-# 2. 根据阈值进行二值化着色 (解决颜色太淡问题)
-# 阈值设置：您可以根据输出结果调整这个值。
-# 建议值：所有权重的平均值，或者 1/N (N为词数)，例如 0.02 - 0.05 之间
-threshold = 0.008
+        # 开始新的词
+        current_word_parts = [token]
+        current_scores = [score]
+
+# 循环结束后，别忘了结算最后一个词
+if current_word_parts:
+    merged_words.append("".join(current_word_parts))
+    merged_scores.append(sum(current_scores) / len(current_scores))
+
+# --- 可视化生成 ---
 
 text_colored = []
-for word, score in zip(words, word_attentions):
-    if score > threshold:
-        # 大于阈值：红色，加粗
-        color = "red"
-        font_weight = "bold"
-    else:
-        # 小于阈值：蓝色，正常粗细
-        color = "blue"
-        font_weight = "normal"
-
-    # 生成 HTML span 标签
-    colored_token = f'<span style="color:{color}; font-weight:{font_weight}; margin-right: 4px;">{word}</span>'
+for word, score in zip(merged_words, merged_scores):
+    color = attention_color(score)
+    # 生成带颜色的 HTML span
+    colored_token = f'<span style="color:{color}">{word}</span>'
     text_colored.append(colored_token)
 
-# 1. 拼接文本
+# 拼接文本
 html_content = " ".join(text_colored)
-
-# 2. 简单的标点符号空格处理 (保持原有逻辑)
+# 后处理标点符号
 html_content = html_content.replace(" ,", ",").replace(" .", ".").replace(" ;", ";").replace(" :", ":")
 
-# 3. 写入文件，重点是修改 div 的 style
-with open("attention_visualization.html", "w", encoding="utf-8") as f:
-    f.write(f"""
+# --- 生成带有图注（Legend）的 HTML ---
+
+# 定义 CSS 渐变色，对应 nipy_spectral_r 的颜色顺序 (大致为: 红 -> 黄 -> 绿 -> 蓝 -> 紫)
+# 注意：Linear-gradient 的方向是从左到右
+gradient_css = "linear-gradient(to right, #e60000, #ffcc00, #00b300, #0066cc, #800080)"
+
+html_template = f"""
+<div style='font-family: Arial, sans-serif; max-width: 1000px; margin: 20px auto; padding: 20px; border: 1px solid #ddd; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);'>
+
+    <!-- 顶部图注区域 -->
+    <div style="margin-bottom: 25px; text-align: center;">
+        <h3 style="margin: 0 0 10px 0; color: #333;">Text Attention</h3>
+
+        <!-- 彩虹条容器 -->
+        <div style="width: 300px; margin: 0 auto;">
+            <!-- 彩虹渐变条 -->
+            <div style="
+                height: 15px; 
+                width: 100%; 
+                background: {gradient_css}; 
+                border-radius: 3px;
+            "></div>
+
+            <!-- 文字标签 Lowest / Highest -->
+            <div style="display: flex; justify-content: space-between; margin-top: 5px; font-size: 12px; color: #555; font-weight: bold;">
+                <span>Lowest</span>
+                <span>Highest</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 文本内容区域 -->
     <div style='
         font-size: 16px; 
-        font-family: Arial, sans-serif; 
         line-height: 1.6; 
-        white-space: normal;      /* 强制允许自动换行 */
-        word-wrap: break-word;    /* 允许在长单词内部换行，防止溢出 */
-        overflow-wrap: break-word;/* 标准写法，同上 */
-        max-width: 1000px;        /* 限制最大宽度，避免太宽难以阅读 */
-        margin: 20px;             /*以此留出一些边距 */
+        white-space: normal;      
+        word-wrap: break-word;    
+        overflow-wrap: break-word;
+        text-align: justify;
     '>
         {html_content}
     </div>
-    """)
+</div>
+"""
+
+with open("attention_visualization.html", "w", encoding="utf-8") as f:
+    f.write(html_template)
 
 print("HTML 可视化结果保存为: attention_visualization.html")
