@@ -19,9 +19,9 @@ class ImageEncoder(nn.Module):
         self.fc = nn.Linear(in_features, out_dim)
 
     def forward(self, x):
-        x = self.encoder(x)       # [B, C, 1, 1]
-        x = x.flatten(1)          # [B, C]
-        x = self.fc(x)            # [B, out_dim]
+        x = self.encoder(x)  # [B, C, 1, 1]
+        x = x.flatten(1)  # [B, C]
+        x = self.fc(x)  # [B, out_dim]
         return x
 
 
@@ -84,9 +84,15 @@ class ImageTabTextModel(nn.Module):
         self.missing_head = nn.Parameter(torch.randn(1, feature_dim))
         self.missing_thorax = nn.Parameter(torch.randn(1, feature_dim))
 
+        # --- 修改开始: 添加 MultiheadAttention ---
+        # 假设我们将融合后的图像特征、文本特征、表格特征作为序列输入
+        self.attn = nn.MultiheadAttention(embed_dim=feature_dim, num_heads=4, batch_first=True)
+        self.norm = nn.LayerNorm(feature_dim)
+        # --- 修改结束 ---
+
         self.fusion_img_img = GateFusion(dim_a=feature_dim, dim_b=feature_dim, hidden_dim=feature_dim)
-        self.fusion_img_text = GateFusion(dim_a=feature_dim, dim_b=feature_dim, hidden_dim=feature_dim)
-        self.fusion_all = GateFusion(dim_a=feature_dim, dim_b=feature_dim, hidden_dim=feature_dim)
+        # self.fusion_img_text = GateFusion(dim_a=feature_dim, dim_b=feature_dim, hidden_dim=feature_dim) # 可以保留或替换
+        # self.fusion_all = GateFusion(dim_a=feature_dim, dim_b=feature_dim, hidden_dim=feature_dim)       # 可以保留或替换
 
         self.classifier = nn.Sequential(
             nn.Linear(feature_dim, feature_dim),
@@ -114,8 +120,15 @@ class ImageTabTextModel(nn.Module):
             text_feat = torch.zeros_like(img_fused).to(img_fused.device)
         else:
             text_feat = self.text_encoder(input_ids, attention_mask)  # [B, D]
-        img_text_fused = self.fusion_img_text(img_fused, text_feat)
 
-        fused = self.fusion_all(img_text_fused, tab_feat)  # [B, D]
+        # 构造序列: [img_fused, text_feat, tab_feat] -> shape [B, 3, D]
+        # 注意: 也可以把 head_feat 和 thorax_feat 分开不融合直接放进来，变成序列长度为4
+        stack_feat = torch.stack([img_fused, text_feat, tab_feat], dim=1)  # [B, 3, D]
+        attn_out, _ = self.attn(stack_feat, stack_feat, stack_feat)  # [B, 3, D]
+        # 残差连接 + LayerNorm
+        fused_seq = self.norm(stack_feat + attn_out)
+        # 聚合策略：取平均 (Global Average Pooling) 或者取第一个token，或者Flatten
+        fused = torch.mean(fused_seq, dim=1)  # [B, D]
+
         logits = self.classifier(fused)  # [B, C]
         return logits, fused

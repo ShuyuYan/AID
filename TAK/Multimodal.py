@@ -99,8 +99,8 @@ if __name__ == "__main__":
         # C. 新层/融合层/分类器 - 基础LR (用于快速学习)
         {'params': model.tab_encoder.parameters(), 'lr': lr},
         {'params': model.fusion_img_img.parameters(), 'lr': lr},
-        {'params': model.fusion_img_text.parameters(), 'lr': lr},
-        {'params': model.fusion_all.parameters(), 'lr': lr},
+        # {'params': model.fusion_img_text.parameters(), 'lr': lr},
+        # {'params': model.fusion_all.parameters(), 'lr': lr},
         {'params': model.classifier.parameters(), 'lr': lr},
     ]
     optimizer = torch.optim.AdamW(param_groups, lr=lr, weight_decay=1e-2)
