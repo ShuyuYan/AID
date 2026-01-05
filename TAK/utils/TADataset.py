@@ -31,6 +31,7 @@ def load_nii(path, target_size=(256, 256), num_slices=3):
         img = img.permute(2, 0, 1)
         img = torch.rot90(img, k=-1, dims=(1, 2))
         img = F_tv.resize(img, target_size)
+        img = F_tv.hflip(img)
         # 确保img为三通道图像
         if img.shape[0] == 1:
             img = img.repeat(3, 1, 1)
