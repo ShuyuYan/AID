@@ -5,17 +5,20 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.model_selection import StratifiedKFold, cross_validate, train_test_split
 from sklearn.metrics import classification_report, accuracy_score, f1_score, make_scorer
+from sklearn.utils.class_weight import compute_sample_weight
 from imblearn.over_sampling import SMOTE
+from tabpfn import TabPFNClassifier
 import xgboost as xgb
+
 """
 筛选基线数据中的数值型数据，使用随机森林和XGBoost两种模型预测患者治疗方案
 尝试ClassWeight和SMOTE两种增强方法缓解类不平衡问题
 XGBoost+ClassWeight方法效果最好
+新增TabPFN方法
 """
 
-
 # ========== 数据读取 ==========
-df = pd.read_excel(os.path.expanduser('~/Data/AID/all.xlsx'), sheet_name='effect1')
+df = pd.read_excel(os.path.expanduser('~/Data/AID/all.xlsx'), sheet_name='714')
 target_col = df.columns[-1]
 
 # 特征 + 标签
@@ -42,6 +45,9 @@ def get_models(class_weight=None):
         "XGBoost": xgb.XGBClassifier(
             n_estimators=300, learning_rate=0.1, max_depth=5,
             random_state=42, use_label_encoder=False, eval_metric="mlogloss"
+        ),
+        "TabPFN": TabPFNClassifier(
+            model_path='/home/yanshuyu/Downloads/tabpfn-v2-classifier.ckpt'
         )
     }
 
@@ -64,7 +70,11 @@ def collect_reports(model, X, y, use_class_weight=False, model_name=""):
         else:
             model.fit(X_tr, y_tr)
 
-        y_pred = model.predict(X_te)
+        if model_name == "TabPFN":
+            y_pred = model.predict(X_te)
+        else:
+            y_pred = model.predict(X_te)
+
         y_true_all.extend(y_te)
         y_pred_all.extend(y_pred)
 
@@ -73,12 +83,24 @@ def collect_reports(model, X, y, use_class_weight=False, model_name=""):
 
 # ---- 1. Baseline ----
 for name, model in get_models().items():
-    cv_res = cross_validate(model, X_train, y_train, cv=5, scoring=scoring)
+    if name == "TabPFN":
+        model.fit(X_train, y_train)
+        y_test_pred = model.predict(X_test)
+        test_acc = accuracy_score(y_test, y_test_pred)
+        test_f1 = f1_score(y_test, y_test_pred, average='macro')
 
-    model.fit(X_train, y_train)
-    y_test_pred = model.predict(X_test)
-    test_acc = accuracy_score(y_test, y_test_pred)
-    test_f1 = f1_score(y_test, y_test_pred, average='macro')
+        cv_res = {
+            "test_accuracy": [test_acc],
+            "test_f1_macro": [test_f1]
+        }
+    else:
+        cv_res = cross_validate(model, X_train, y_train, cv=5, scoring=scoring)
+
+        model.fit(X_train, y_train)
+        y_test_pred = model.predict(X_test)
+        test_acc = accuracy_score(y_test, y_test_pred)
+        test_f1 = f1_score(y_test, y_test_pred, average='macro')
+
     results.append({
         "Setting": "Baseline",
         "Model": name,
@@ -94,10 +116,14 @@ for name, model in get_models().items():
 
 # ---- 2. ClassWeight ----
 for name, model in get_models(class_weight="balanced").items():
+    if name == "TabPFN":
+        # Skip TabPFN for ClassWeight as it does not support class weighting
+        continue
+
     if name == "XGBoost":
         skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
         acc_scores, f1_scores = [], []
-        from sklearn.utils.class_weight import compute_sample_weight
+
         for train_idx, test_idx in skf.split(X, y):
             X_tr, X_te = X[train_idx], X[test_idx]
             y_tr, y_te = y[train_idx], y[test_idx]
@@ -107,10 +133,11 @@ for name, model in get_models(class_weight="balanced").items():
             acc_scores.append(accuracy_score(y_te, y_pred))
             f1_scores.append(f1_score(y_te, y_pred, average="macro"))
 
-            model.fit(X_train, y_train)
-            y_test_pred = model.predict(X_test)
-            test_acc = accuracy_score(y_test, y_test_pred)
-            test_f1 = f1_score(y_test, y_test_pred, average='macro')
+        model.fit(X_train, y_train)
+        y_test_pred = model.predict(X_test)
+        test_acc = accuracy_score(y_test, y_test_pred)
+        test_f1 = f1_score(y_test, y_test_pred, average='macro')
+
         results.append({
             "Setting": "ClassWeight",
             "Model": name,
@@ -148,6 +175,10 @@ smote = SMOTE(random_state=42)
 n_splits = 5
 
 for name, model in get_models().items():
+    if name == "TabPFN":
+        # Skip TabPFN for SMOTE as it does not support resampling
+        continue
+
     fold_acc = []
     fold_f1 = []
 
