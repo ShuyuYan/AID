@@ -3,7 +3,6 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from utils.model import *
 from IPython.core.display import display, HTML
-
 """
 加载report模型权重，提取BERT模型的注意力权重，将模型关注点可视化
 """
