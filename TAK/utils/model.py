@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from transformers import AutoTokenizer, AutoModel
 import torchvision.models as models
+from tabpfn import TabPFNClassifier
 
 
 class ImageEncoder(nn.Module):
@@ -25,7 +26,7 @@ class ImageEncoder(nn.Module):
         return x
 
 
-class TabularEncoder(nn.Module):
+class TabMLPEncoder(nn.Module):
     def __init__(self, in_dim, out_dim=128):
         super().__init__()
         self.mlp = nn.Sequential(
@@ -54,6 +55,70 @@ class TextEncoder(nn.Module):
         return self.proj(pooled)
 
 
+class TabPFNEncoder(nn.Module):
+    def __init__(self, in_dim, out_dim=128, n_ensemble=4):
+        super().__init__()
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        self.tabpfn = TabPFNClassifier(
+            model_path='/home/yanshuyu/Downloads/tabpfn-v2-classifier-v2_default.ckpt',
+            device='cuda' if torch.cuda. is_available() else 'cpu',
+            n_estimators=n_ensemble
+        )
+
+        self.fitted = True
+        self.projection = nn.Linear(512, out_dim)
+        self.fallback_mlp = nn.Sequential(
+            nn.Linear(in_dim, 128),
+            nn.ReLU(),
+            nn. Dropout(0.4),
+            nn.Linear(128, out_dim),
+        )
+        # 用于处理TabPFN特征的MLP
+        self.tabpfn_mlp = None
+
+    def fit(self, X_train, y_train):
+        if isinstance(X_train, torch.Tensor):
+            X_train = X_train.detach().cpu().numpy()
+        if isinstance(y_train, torch.Tensor):
+            y_train = y_train. detach().cpu().numpy()
+
+        self.tabpfn.fit(X_train, y_train)
+        self.fitted = True
+        return self
+
+    def extract_tabpfn_features(self, x):
+        if isinstance(x, torch.Tensor):
+            device = x.device
+            x_np = x. detach().cpu().numpy()
+        else:
+            device = 'cpu'
+            x_np = x
+
+        proba = self.tabpfn.predict_proba(x_np)
+        features = torch.tensor(proba, dtype=torch.float32, device=device)
+        return features
+
+    def forward(self, x):
+        if not self.fitted:
+            # print('MLP')
+            return self.fallback_mlp(x)
+
+        # print('TabPFN')
+        with torch.no_grad():
+            tabpfn_feat = self.extract_tabpfn_features(x)
+        if tabpfn_feat.shape[-1] != 512:
+            self.projection = nn.Linear(
+                tabpfn_feat.shape[-1], self.out_dim
+            ).to(x.device)
+
+        projected_feat = self.projection(tabpfn_feat)
+        mlp_feat = self.fallback_mlp(x)
+
+        output = projected_feat + mlp_feat
+        return output
+
+
 class GateFusion(nn.Module):
     def __init__(self, dim_a=256, dim_b=256, hidden_dim=256):
         super().__init__()
@@ -65,7 +130,7 @@ class GateFusion(nn.Module):
         )
 
     def forward(self, a, b):
-        # a,b: [B, D] (same D)
+        # a,b:  [B, D] (same D)
         x = torch.cat([a, b], dim=1)
         gate = self.gate_fc(x)
         fused = gate * a + (1 - gate) * b
@@ -73,18 +138,24 @@ class GateFusion(nn.Module):
 
 
 class ImageTabTextModel(nn.Module):
-    def __init__(self, num_labels, tab_dim, bert_path, img_backbone="resnet18", feature_dim=256, tab_out_dim=128):
+    def __init__(self, num_labels, tab_dim, bert_path, img_backbone="resnet18", feature_dim=256, tab_out_dim=128,
+                 n_ensemble=4):
         super().__init__()
 
         self.image_encoder = ImageEncoder(backbone=img_backbone, out_dim=feature_dim)
-        self.tab_encoder = TabularEncoder(in_dim=tab_dim, out_dim=tab_out_dim)
-        self.tab_proj = nn.Linear(tab_out_dim, feature_dim)
+
+        # --- 修改:  使用 TabPFNEncoder 替换 TabularEncoder ---
+        # 直接输出 feature_dim，省去额外的 projection 层
+        self.tab_encoder = TabPFNEncoder(in_dim=tab_dim, out_dim=feature_dim, n_ensemble=n_ensemble)
+        # 不再需要 tab_proj，因为 TabPFNEncoder 直接输出 feature_dim
+        # --- 修改结束 ---
+
         self.text_encoder = TextEncoder(bert_path, out_dim=feature_dim, freeze_bert=False)
 
         self.missing_head = nn.Parameter(torch.randn(1, feature_dim))
         self.missing_thorax = nn.Parameter(torch.randn(1, feature_dim))
 
-        # --- 修改开始: 添加 MultiheadAttention ---
+        # --- 修改开始:  添加 MultiheadAttention ---
         # 假设我们将融合后的图像特征、文本特征、表格特征作为序列输入
         self.attn = nn.MultiheadAttention(embed_dim=feature_dim, num_heads=4, batch_first=True)
         self.norm = nn.LayerNorm(feature_dim)
@@ -101,6 +172,11 @@ class ImageTabTextModel(nn.Module):
             nn.Linear(feature_dim, num_labels)
         )
 
+    def fit_tab_encoder(self, X_train, y_train):
+        """拟合 TabPFN 编码器（需要在训练前调用）"""
+        self.tab_encoder.fit(X_train, y_train)
+        return self
+
     def forward(self, head, thorax, tab, input_ids=None, attention_mask=None,
                 head_mask=None, thorax_mask=None):
 
@@ -111,8 +187,9 @@ class ImageTabTextModel(nn.Module):
         if thorax_mask is not None:
             thorax_feat = thorax_feat * thorax_mask + self.missing_thorax * (1 - thorax_mask)
 
-        tab_feat = self.tab_encoder(tab)  # [B, tab_out_dim]
-        tab_feat = self.tab_proj(tab_feat)  # [B, D]
+        # --- 修改: 直接使用 tab_encoder，不需要 tab_proj ---
+        tab_feat = self.tab_encoder(tab)  # [B, feature_dim] 直接输出目标维度
+        # --- 修改结束 ---
 
         img_fused = self.fusion_img_img(head_feat, thorax_feat)  # [B, D]
 

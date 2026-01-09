@@ -2,6 +2,16 @@ import os
 import copy
 import datetime
 import torch
+
+# _original_torch_load = torch.load
+#
+# def _patched_torch_load(*args, **kwargs):
+#     # 强制设置 weights_only=False
+#     kwargs['weights_only'] = False
+#     return _original_torch_load(*args, **kwargs)
+#
+# torch.load = _patched_torch_load
+
 import torch.nn as nn
 import torch.nn.functional as F
 import pandas as pd
@@ -43,7 +53,7 @@ if __name__ == "__main__":
     batch_size = 8
     num_workers = 4
     lr = 2e-4
-    num_epochs = 30
+    num_epochs = 100
     best_val_acc = 0.9
     mra_drop_prob = 0.25
 
@@ -86,8 +96,12 @@ if __name__ == "__main__":
         img_backbone="resnet18",
         feature_dim=256,
         tab_out_dim=128
-    ).to(device)
+    )
 
+    X_tab_for_fit = X_np[train_lab_idx]
+    y_for_fit = y_for_dataset[train_lab_idx]
+    model.fit_tab_encoder(X_tab_for_fit, y_for_fit)
+    model = model.to(device)
     param_groups = [
         # A. 图像编码器 (ResNet) - 最小的LR
         {'params': model.image_encoder.parameters(), 'lr': 0.01 * lr},
