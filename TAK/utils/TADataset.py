@@ -6,7 +6,7 @@ from torch.utils.data import Dataset
 
 
 def load_nii(path, target_size=(256, 256), num_slices=3):
-    if path == '0':
+    if path == '/':
         return torch.zeros((num_slices, *target_size), dtype=torch.float32)
 
     try:
@@ -72,18 +72,23 @@ class TADataset(Dataset):
         TA = str(row['TA'])
         head_path = row['head']
         thorax_path = row['thorax']
+        leg_path = row['leg']
         head = load_nii(head_path, (224, 224), 3)
         thorax = load_nii(thorax_path, (224, 224), 3)
-        is_head_valid = 1.0 if (head_path != '0' and os.path.exists(head_path)) else 0.0
-        is_thorax_valid = 1.0 if (thorax_path != '0' and os.path.exists(thorax_path)) else 0.0
+        leg = load_nii(leg_path, (224, 244), 3)
+        is_head_valid = 1.0 if (head_path != '/' and os.path.exists(head_path)) else 0.0
+        is_thorax_valid = 1.0 if (thorax_path != '/' and os.path.exists(thorax_path)) else 0.0
+        is_leg_valid = 1.0 if (leg_path != '/' and os.path.exists(thorax_path)) else 0.0
 
         return {
             "TA": TA,
             "head": head,
             "thorax": thorax,
+            "leg": leg,
             "report": report,
             "head_mask": torch.tensor([is_head_valid], dtype=torch.float32),
             "thorax_mask": torch.tensor([is_thorax_valid], dtype=torch.float32),
+            "leg_mask": torch.tensor([is_leg_valid], dtype=torch.float32),
             "text_tokens": {
                 "input_ids": input_ids,
                 "attention_mask": attention_mask
