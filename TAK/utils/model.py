@@ -51,7 +51,7 @@ class TextEncoder(nn.Module):
 
     def forward(self, input_ids, attention_mask):
         outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
-        pooled = outputs.last_hidden_state[:, 0, :]  # CLS token
+        pooled = outputs.last_hidden_state[: , 0, :]  # CLS token
         return self.proj(pooled)
 
 
@@ -61,8 +61,8 @@ class TabPFNEncoder(nn.Module):
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.tabpfn = TabPFNClassifier(
-            model_path='/home/yanshuyu/Downloads/tabpfn-v2-classifier-v2_default.ckpt',
-            device='cuda' if torch.cuda. is_available() else 'cpu',
+            model_path='/home/yanshuyu/Data/AID/TAK/TabPFN/tabpfn-v2-classifier-v2_default.ckpt',
+            device='cuda' if torch.cuda.is_available() else 'cpu',
             n_estimators=n_ensemble
         )
 
@@ -71,7 +71,7 @@ class TabPFNEncoder(nn.Module):
         self.fallback_mlp = nn.Sequential(
             nn.Linear(in_dim, 128),
             nn.ReLU(),
-            nn. Dropout(0.4),
+            nn.Dropout(0.4),
             nn.Linear(128, out_dim),
         )
         # 用于处理TabPFN特征的MLP
@@ -81,7 +81,7 @@ class TabPFNEncoder(nn.Module):
         if isinstance(X_train, torch.Tensor):
             X_train = X_train.detach().cpu().numpy()
         if isinstance(y_train, torch.Tensor):
-            y_train = y_train. detach().cpu().numpy()
+            y_train = y_train.detach().cpu().numpy()
 
         self.tabpfn.fit(X_train, y_train)
         self.fitted = True
@@ -90,7 +90,7 @@ class TabPFNEncoder(nn.Module):
     def extract_tabpfn_features(self, x):
         if isinstance(x, torch.Tensor):
             device = x.device
-            x_np = x. detach().cpu().numpy()
+            x_np = x.detach().cpu().numpy()
         else:
             device = 'cpu'
             x_np = x
@@ -144,7 +144,7 @@ class ImageTabTextModel(nn.Module):
 
         self.image_encoder = ImageEncoder(backbone=img_backbone, out_dim=feature_dim)
 
-        # --- 修改:  使用 TabPFNEncoder 替换 TabularEncoder ---
+        # --- 修改: 使用 TabPFNEncoder 替换 TabularEncoder ---
         # 直接输出 feature_dim，省去额外的 projection 层
         self.tab_encoder = TabPFNEncoder(in_dim=tab_dim, out_dim=feature_dim, n_ensemble=n_ensemble)
         # 不再需要 tab_proj，因为 TabPFNEncoder 直接输出 feature_dim
@@ -154,16 +154,19 @@ class ImageTabTextModel(nn.Module):
 
         self.missing_head = nn.Parameter(torch.randn(1, feature_dim))
         self.missing_thorax = nn.Parameter(torch.randn(1, feature_dim))
+        self.missing_leg = nn.Parameter(torch.randn(1, feature_dim))  # 新增 leg 缺失占位符
 
-        # --- 修改开始:  添加 MultiheadAttention ---
-        # 假设我们将融合后的图像特征、文本特征、表格特征作为序列输入
+        # 1. 定义门控融合模块
+        # 用于 MRA 内部 (Head + Thorax)
+        self.fusion_img_img = GateFusion(dim_a=feature_dim, dim_b=feature_dim, hidden_dim=feature_dim)
+        # 用于 (Head+Thorax) + Leg 融合
+        self.fusion_img_leg = GateFusion(dim_a=feature_dim, dim_b=feature_dim, hidden_dim=feature_dim)
+        # 用于 MRA + Report (Image + Text) -> 新增
+        self.fusion_img_text = GateFusion(dim_a=feature_dim, dim_b=feature_dim, hidden_dim=feature_dim)
+
+        # 2. 多头注意力
         self.attn = nn.MultiheadAttention(embed_dim=feature_dim, num_heads=4, batch_first=True)
         self.norm = nn.LayerNorm(feature_dim)
-        # --- 修改结束 ---
-
-        self.fusion_img_img = GateFusion(dim_a=feature_dim, dim_b=feature_dim, hidden_dim=feature_dim)
-        # self.fusion_img_text = GateFusion(dim_a=feature_dim, dim_b=feature_dim, hidden_dim=feature_dim) # 可以保留或替换
-        # self.fusion_all = GateFusion(dim_a=feature_dim, dim_b=feature_dim, hidden_dim=feature_dim)       # 可以保留或替换
 
         self.classifier = nn.Sequential(
             nn.Linear(feature_dim, feature_dim),
@@ -177,35 +180,47 @@ class ImageTabTextModel(nn.Module):
         self.tab_encoder.fit(X_train, y_train)
         return self
 
-    def forward(self, head, thorax, tab, input_ids=None, attention_mask=None,
-                head_mask=None, thorax_mask=None):
+    def forward(self, head, thorax, leg, tab, input_ids=None, attention_mask=None,
+                head_mask=None, thorax_mask=None, leg_mask=None):
 
         head_feat = self.image_encoder(head)  # [B, D]
         thorax_feat = self.image_encoder(thorax)  # [B, D]
+        leg_feat = self.image_encoder(leg)  # [B, D] 新增 leg 特征提取
+
+        # 处理缺失的图像特征
         if head_mask is not None:
             head_feat = head_feat * head_mask + self.missing_head * (1 - head_mask)
         if thorax_mask is not None:
             thorax_feat = thorax_feat * thorax_mask + self.missing_thorax * (1 - thorax_mask)
+        if leg_mask is not None:  # 新增 leg mask 处理
+            leg_feat = leg_feat * leg_mask + self.missing_leg * (1 - leg_mask)
 
         # --- 修改: 直接使用 tab_encoder，不需要 tab_proj ---
         tab_feat = self.tab_encoder(tab)  # [B, feature_dim] 直接输出目标维度
         # --- 修改结束 ---
 
+        # 融合 head 和 thorax
         img_fused = self.fusion_img_img(head_feat, thorax_feat)  # [B, D]
+        # 融合 (head+thorax) 和 leg
+        img_fused = self.fusion_img_leg(img_fused, leg_feat)  # [B, D]
 
         if input_ids is None:
             text_feat = torch.zeros_like(img_fused).to(img_fused.device)
         else:
             text_feat = self.text_encoder(input_ids, attention_mask)  # [B, D]
 
-        # 构造序列: [img_fused, text_feat, tab_feat] -> shape [B, 3, D]
-        # 注意: 也可以把 head_feat 和 thorax_feat 分开不融合直接放进来，变成序列长度为4
-        stack_feat = torch.stack([img_fused, text_feat, tab_feat], dim=1)  # [B, 3, D]
-        attn_out, _ = self.attn(stack_feat, stack_feat, stack_feat)  # [B, 3, D]
-        # 残差连接 + LayerNorm
+        # 构造序列: [img_fused, text_feat, tab_feat] -> shape [B, 5, D]
+        img_text_fused = self.fusion_img_text(img_fused, text_feat)  # [B, D]
+        stack_feat = torch.stack([img_text_fused, img_fused, text_feat, tab_feat, leg_feat], dim=1)  # [B, 5, D]
+
+        # --- E. 多头注意力与聚合 ---
+        attn_out, _ = self.attn(stack_feat, stack_feat, stack_feat)
+
+        # 残差连接 + 归一化
         fused_seq = self.norm(stack_feat + attn_out)
-        # 聚合策略：取平均 (Global Average Pooling) 或者取第一个token，或者Flatten
+
+        # 全局平均池化 (Global Average Pooling)
         fused = torch.mean(fused_seq, dim=1)  # [B, D]
 
-        logits = self.classifier(fused)  # [B, C]
+        logits = self.classifier(fused)
         return logits, fused

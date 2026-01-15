@@ -9,30 +9,30 @@ from torch.utils.data import DataLoader, Subset
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.impute import SimpleImputer
-from sklearn. metrics import classification_report
+from sklearn.metrics import classification_report
 from transformers import AutoTokenizer, AutoModel
 import torchvision.models as models
-from torch.optim. lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
-from utils. TADataset import TADataset
+from utils.TADataset import TADataset
 from utils.model import *
 """
 三模态数据融合预测最终治疗方案
 """
 
 if __name__ == "__main__":
-    device = torch.device("cuda" if torch. cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     bert_path = "/home/yanshuyu/Data/AID/TAK/Bio_ClinicalBERT"
     # bert_path = "medicalai/ClinicalBERT"
     excel_path = "/home/yanshuyu/Data/AID/all.xlsx"
     tokenizer = AutoTokenizer.from_pretrained(bert_path)
     writer = SummaryWriter(log_dir="/home/yanshuyu/Data/AID/runs/Multimodal")
-    start_time = datetime. datetime.now().strftime("%Y%m%d_%H%M%S")
+    start_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     save_dir = "/home/yanshuyu/Data/AID/TAK/checkpoints"
     os.makedirs(save_dir, exist_ok=True)
     df = pd.read_excel(excel_path, sheet_name='in')
-    label_col = df. columns[-1]
+    label_col = df.columns[-1]
 
     num_labels = 3
     valid_label_values = [0, 1, 2]
@@ -44,28 +44,28 @@ if __name__ == "__main__":
     best_val_acc = 0.9
     mra_drop_prob = 0.25
 
-    X = df. select_dtypes(include=['int64', 'float64'])
+    X = df.select_dtypes(include=['int64', 'float64'])
     X = X.drop(columns=[label_col, 'pred'], errors='ignore')
     imputer = SimpleImputer(strategy="mean")
     X_np = imputer.fit_transform(X)
     scaler = StandardScaler()
     X_np = scaler.fit_transform(X_np)
     report = df['mra_examination_re_des_1'].astype(str).tolist()[:len(X_np)]
-    labels_series = df[label_col]. astype(int)
+    labels_series = df[label_col].astype(int)
 
-    y_for_dataset = labels_series. values
+    y_for_dataset = labels_series.values
     data = TADataset(df, report, X_np, y_for_dataset, tokenizer, max_length)
 
     all_indices = df.index.to_numpy()
     labeled_indices = df.index[df[label_col] != -1].to_numpy()
-    unlabeled_indices = df.index[df[label_col] == -1]. to_numpy()
+    unlabeled_indices = df.index[df[label_col] == -1].to_numpy()
     train_lab_idx, val_lab_idx = train_test_split(
         labeled_indices,
         test_size=0.2,
         random_state=42,
-        stratify=df. loc[labeled_indices, label_col].values
+        stratify=df.loc[labeled_indices, label_col].values
     )
-    train_indices = list(train_lab_idx) + list(unlabeled_indices. tolist())
+    train_indices = list(train_lab_idx) + list(unlabeled_indices.tolist())
     val_indices = list(val_lab_idx)
 
     train_subset = Subset(data, train_indices)
@@ -90,21 +90,21 @@ if __name__ == "__main__":
     model.fit_tab_encoder(X_tab_for_fit, y_for_fit)
     model = model.to(device)
     param_groups = [
-        # A.  图像编码器 (ResNet) - 最小的LR
+        # A. 图像编码器 (ResNet) - 最小的LR
         {'params': model.image_encoder.parameters(), 'lr': 0.01 * lr},
 
-        # B. 文本编码器 (BERT) - 适中的LR
-        {'params': model.text_encoder. bert.parameters(), 'lr': 0.1 * lr},
-        {'params': model.text_encoder. proj. parameters(), 'lr': lr},  # 投影层是新层，用基准LR
+        # B.文本编码器 (BERT) - 适中的LR
+        {'params': model.text_encoder.bert.parameters(), 'lr': 0.1 * lr},
+        {'params': model.text_encoder.proj.parameters(), 'lr': lr},  # 投影层是新层，用基准LR
 
-        # C. 新层/融合层/分类器 - 基础LR (用于快速学习)
+        # C.新层/融合层/分类器 - 基础LR (用于快速学习)
         {'params': model.tab_encoder.parameters(), 'lr': lr},
         {'params': model.fusion_img_img.parameters(), 'lr': lr},
-        # {'params': model. fusion_img_text.parameters(), 'lr': lr},
-        # {'params': model. fusion_all.parameters(), 'lr': lr},
+        # {'params': model.fusion_img_text.parameters(), 'lr': lr},
+        # {'params': model.fusion_all.parameters(), 'lr': lr},
         {'params': model.classifier.parameters(), 'lr': lr},
     ]
-    optimizer = torch. optim.AdamW(param_groups, lr=lr, weight_decay=1e-2)
+    optimizer = torch.optim.AdamW(param_groups, lr=lr, weight_decay=1e-2)
     criterion = nn.CrossEntropyLoss()
     scheduler = ReduceLROnPlateau(optimizer, 'min', patience=3, factor=0.5)
 
@@ -113,13 +113,13 @@ if __name__ == "__main__":
         total_loss = 0.0
 
         for batch in tqdm(train_loader, desc=f'Epoch {epoch} [Train]'):
-            head = batch['head']. to(device)
+            head = batch['head'].to(device)
             thorax = batch['thorax'].to(device)
-            leg = batch['leg']. to(device)  # 新增 leg
+            leg = batch['leg'].to(device)  # 新增 leg
             tab = batch['tab'].to(device).float()
             label = batch['label'].to(device)
             text_tokens = batch.get('text_tokens', None)
-            if text_tokens is not None and text_tokens. get('input_ids', None) is not None:
+            if text_tokens is not None and text_tokens.get('input_ids', None) is not None:
                 input_ids = text_tokens['input_ids'].to(device)
                 attention_mask = text_tokens['attention_mask'].to(device)
             else:
@@ -130,8 +130,8 @@ if __name__ == "__main__":
             leg_mask = batch['leg_mask'].to(device)  # 新增 leg_mask
 
             optimizer.zero_grad()
-            rand_head_mask = (torch.rand(head. size(0), 1, device=device) > mra_drop_prob).float()
-            rand_thorax_mask = (torch. rand(head.size(0), 1, device=device) > mra_drop_prob).float()
+            rand_head_mask = (torch.rand(head.size(0), 1, device=device) > mra_drop_prob).float()
+            rand_thorax_mask = (torch.rand(head.size(0), 1, device=device) > mra_drop_prob).float()
             rand_leg_mask = (torch.rand(leg.size(0), 1, device=device) > mra_drop_prob).float()  # 新增随机mask
             head_mask = head_mask * rand_head_mask
             thorax_mask = thorax_mask * rand_thorax_mask
@@ -154,10 +154,10 @@ if __name__ == "__main__":
             for batch in tqdm(val_loader, desc=f'Epoch {epoch} [Val]'):
                 head = batch['head'].to(device)
                 thorax = batch['thorax'].to(device)
-                leg = batch['leg']. to(device)  # 新增 leg
+                leg = batch['leg'].to(device)  # 新增 leg
                 tab = batch['tab'].to(device).float()
                 label = batch['label'].to(device)
-                text_tokens = batch. get('text_tokens', None)
+                text_tokens = batch.get('text_tokens', None)
                 if text_tokens is not None and text_tokens.get('input_ids', None) is not None:
                     input_ids = text_tokens['input_ids'].to(device)
                     attention_mask = text_tokens['attention_mask'].to(device)
@@ -170,7 +170,7 @@ if __name__ == "__main__":
 
                 logits, _ = model(head, thorax, leg, tab, input_ids, attention_mask, head_mask, thorax_mask, leg_mask)  # 新增 leg 和 leg_mask
                 loss_batch = criterion(logits, label)
-                val_loss += loss_batch. item()
+                val_loss += loss_batch.item()
 
                 preds = torch.argmax(logits, dim=1)
                 all_preds.extend(preds.cpu().tolist())
@@ -188,7 +188,7 @@ if __name__ == "__main__":
             avg_train_loss = 0.0
             avg_val_loss = 0.0
 
-        writer. add_scalar('Train Loss', avg_train_loss, epoch)
+        writer.add_scalar('Train Loss', avg_train_loss, epoch)
         writer.add_scalar('Val Loss', avg_val_loss, epoch)
         writer.add_scalar('Val Acc', val_acc, epoch)
         print(f"Epoch {epoch} | Train Loss: {avg_train_loss:.4f} |"
@@ -204,8 +204,8 @@ if __name__ == "__main__":
 
             checkpoint = {
                 'model_state_dict': model.state_dict(),
-                'tabpfn_classifier': model. tab_encoder.tabpfn,  # 保存拟合后的TabPFN
-                'projection_in_features': model.tab_encoder.projection. in_features,  # 保存projection维度
+                'tabpfn_classifier': model.tab_encoder.tabpfn,  # 保存拟合后的TabPFN
+                'projection_in_features': model.tab_encoder.projection.in_features,  # 保存projection维度
                 'imputer': imputer,  # 保存预处理器
                 'scaler': scaler,
             }
@@ -214,4 +214,4 @@ if __name__ == "__main__":
         scheduler.step(avg_val_loss)
 
     writer.close()
-    print("Training finished. Best val acc:", best_val_acc)
+    print("Training finished.Best val acc:", best_val_acc)
