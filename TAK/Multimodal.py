@@ -2,16 +2,6 @@ import os
 import copy
 import datetime
 import torch
-
-# _original_torch_load = torch.load
-#
-# def _patched_torch_load(*args, **kwargs):
-#     # 强制设置 weights_only=False
-#     kwargs['weights_only'] = False
-#     return _original_torch_load(*args, **kwargs)
-#
-# torch.load = _patched_torch_load
-
 import torch.nn as nn
 import torch.nn.functional as F
 import pandas as pd
@@ -31,9 +21,6 @@ from utils.model import *
 三模态数据融合预测最终治疗方案
 """
 
-os.environ['HTTP_PROXY'] = "http://127.0.0.1:7890"
-os.environ['HTTPS_PROXY'] = "http://127.0.0.1:7890"
-
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     bert_path = "/home/yanshuyu/Data/AID/TAK/Bio_ClinicalBERT"
@@ -44,7 +31,7 @@ if __name__ == "__main__":
     start_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     save_dir = "/home/yanshuyu/Data/AID/TAK/checkpoints"
     os.makedirs(save_dir, exist_ok=True)
-    df = pd.read_excel(excel_path, sheet_name='714')
+    df = pd.read_excel(excel_path, sheet_name='in')
     label_col = df.columns[-1]
 
     num_labels = 3
@@ -52,13 +39,13 @@ if __name__ == "__main__":
     max_length = 384
     batch_size = 8
     num_workers = 4
-    lr = 2e-4
+    lr = 1e-4
     num_epochs = 100
     best_val_acc = 0.9
     mra_drop_prob = 0.25
 
     X = df.select_dtypes(include=['int64', 'float64'])
-    X = X.drop(columns=[label_col], errors='ignore')
+    X = X.drop(columns=[label_col, 'pred'], errors='ignore')
     imputer = SimpleImputer(strategy="mean")
     X_np = imputer.fit_transform(X)
     scaler = StandardScaler()
@@ -208,7 +195,15 @@ if __name__ == "__main__":
 
             ckpt_name = f"{start_time}_epoch{epoch}_acc{val_acc:.4f}.pth"
             best_path = os.path.join(save_dir, ckpt_name)
-            torch.save(model.state_dict(), best_path)
+
+            checkpoint = {
+                'model_state_dict': model.state_dict(),
+                'tabpfn_classifier': model.tab_encoder.tabpfn,  # 保存拟合后的TabPFN
+                'projection_in_features': model.tab_encoder.projection.in_features,  # 保存projection维度
+                'imputer': imputer,  # 保存预处理器
+                'scaler': scaler,
+            }
+            torch.save(checkpoint, best_path)
 
         scheduler.step(avg_val_loss)
 
