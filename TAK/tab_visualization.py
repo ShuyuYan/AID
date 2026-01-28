@@ -93,10 +93,10 @@ for i in range(len(features)):
     if i % 2 == 0:
         ax.axvspan(i - 0.5, i + 0.5, color="#E6E6E6", alpha=0.25, zorder=0)
 
-plt.ylabel('Standardized Value (Z-Score)', fontsize=18)
-plt.xlabel('Indicators', fontsize=18)
-plt.tick_params(axis='x', labelsize=18)
-plt.tick_params(axis='y', labelsize=18)
+plt.ylabel('Standardized Value (Z-Score)', fontsize=22)
+plt.xlabel('Indicators', fontsize=22)
+plt.tick_params(axis='x', labelsize=22)
+plt.tick_params(axis='y', labelsize=22)
 legend = plt.legend(title='Prediction Treatment', loc='upper left', fontsize=16, title_fontsize=18)
 ax.set_xlim(-0.5, len(features) - 0.5)
 labels = ['Treatment A', 'Treatment B', 'Treatment C']
@@ -104,5 +104,5 @@ for text, label in zip(legend.get_texts(), labels):
     text.set_text(label)
 plt.ylim(plot_data['Z-Score Value'].min() - 0.3, plot_data['Z-Score Value'].max() + 2)
 plt.tight_layout()
-plt.savefig('tab_visualization.png', dpi=300)
+plt.savefig('tab_visualization.png', dpi=1000)
 plt.show()
