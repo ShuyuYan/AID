@@ -87,7 +87,7 @@ for i, feature in enumerate(features):
                     # 绘制横线
                     plt.plot([x1, x1, x2, x2], [y_pos, y_pos + 0.1, y_pos + 0.1, y_pos], lw=0.7, c='black')
                     # 绘制星号
-                    plt.text((x1 + x2) / 2, y_pos + 0.1, p_text, ha='center', va='bottom', fontsize=14)
+                    plt.text((x1 + x2) / 2, y_pos + 0.1, p_text, ha='center', va='bottom', fontsize=16)
 
 for i in range(len(features)):
     if i % 2 == 0:
