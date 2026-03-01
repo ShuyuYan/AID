@@ -15,6 +15,9 @@ from tqdm import tqdm
 from utils.TADataset import TADataset
 from utils.model import ImageTabTextModel
 from sklearn.metrics import classification_report
+"""
+加载预训练权重，预测测试集数据
+"""
 
 
 def set_all_seeds(seed=42):
@@ -48,7 +51,6 @@ def load_model(checkpoint_path, num_labels, tab_dim, bert_path, device):
         tab_out_dim=128
     )
 
-    # 修复projection层维度
     if projection_in_features is not None:
         model.tab_encoder.projection = nn.Linear(projection_in_features, model.tab_encoder.out_dim)
     model.load_state_dict(state_dict)
@@ -137,19 +139,14 @@ def predict(
         # val_split: float = 0
 ):
     set_all_seeds(42)
-    """主预测函数"""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"使用设备: {device}")
-
-    # 加载tokenizer
     tokenizer = AutoTokenizer.from_pretrained(bert_path)
 
-    # 读取待预测数据
     df = pd.read_excel(excel_path, sheet_name='in')
     label_col = 'type'
     print(f"加载待预测数据:  {len(df)} 条记录")
 
-    # 如果是评估模式，处理数据集划分
     val_indices = []
     if do_eval:
         if val_split > 0:
@@ -180,7 +177,6 @@ def predict(
         saved_imputer = checkpoint.get('imputer', None)
         saved_scaler = checkpoint.get('scaler', None)
 
-    # 确定预处理器
     if saved_imputer is not None and saved_scaler is not None:
         imputer = saved_imputer
         scaler = saved_scaler
@@ -197,17 +193,13 @@ def predict(
     else:
         raise ValueError("checkpoint中没有预处理器，必须提供--train_data参数")
 
-    # 预处理待预测数据
     X_np, _, _ = preprocess_data(df, label_col, imputer, scaler)
     tab_dim = X_np.shape[1]
 
-    # 准备文本数据
     report = df['mra_report'].astype(str).tolist()[:len(X_np)]
     # report = df['mra_report_ch'].astype(str).tolist()[:len(X_np)]
 
-    # 准备标签
     if do_eval:
-        # 评估模式下，读取真实标签
         try:
             true_labels = df[label_col].astype(int).values
         except Exception:
