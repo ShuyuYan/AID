@@ -1,6 +1,7 @@
 import os
 import copy
 import datetime
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -40,9 +41,9 @@ if __name__ == "__main__":
     batch_size = 8
     num_workers = 4
     lr = 1e-4
-    num_epochs = 100
-    best_val_acc = 0.9
-    mra_drop_prob = 0.25
+    num_epochs = 5
+    best_val_acc = 0.75
+    mra_drop_prob = 0
 
     X = df.select_dtypes(include=['int64', 'float64'])
     X = X.drop(columns=[label_col, 'pred'], errors='ignore')
@@ -50,7 +51,7 @@ if __name__ == "__main__":
     X_np = imputer.fit_transform(X)
     scaler = StandardScaler()
     X_np = scaler.fit_transform(X_np)
-    report = df['mra_examination_re_des_1'].astype(str).tolist()[:len(X_np)]
+    report = df['mra_report'].astype(str).tolist()[:len(X_np)]
     labels_series = df[label_col].astype(int)
 
     y_for_dataset = labels_series.values
@@ -104,7 +105,9 @@ if __name__ == "__main__":
         # {'params': model.fusion_all.parameters(), 'lr': lr},
         {'params': model.classifier.parameters(), 'lr': lr},
     ]
-    optimizer = torch.optim.AdamW(param_groups, lr=lr, weight_decay=1e-2)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-2)
+    # 使用分层学习率
+    # optimizer = torch.optim.AdamW(param_groups, lr=lr, weight_decay=1e-2)
     criterion = nn.CrossEntropyLoss()
     scheduler = ReduceLROnPlateau(optimizer, 'min', patience=3, factor=0.5)
 
@@ -204,7 +207,10 @@ if __name__ == "__main__":
 
             checkpoint = {
                 'model_state_dict': model.state_dict(),
-                'tabpfn_classifier': model.tab_encoder.tabpfn,  # 保存拟合后的TabPFN
+                # 'tabpfn_classifier': model.tab_encoder.tabpfn,  # 保存拟合后的TabPFN
+                'tabpfn_X_context': X_tab_for_fit,  # numpy array
+                'tabpfn_y_context': y_for_fit,
+                'tabpfn_train_idx': train_lab_idx,
                 'projection_in_features': model.tab_encoder.projection.in_features,  # 保存projection维度
                 'imputer': imputer,  # 保存预处理器
                 'scaler': scaler,

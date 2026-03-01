@@ -161,7 +161,7 @@ def show_cam_on_image(img_tensor, mask, alpha=0.3):
     # 显示原图
     plt.subplot(1, 3, 1)
     plt.imshow(img)
-    plt.title(f"Original MRA {TA}")
+    plt.title(f"{TA} {label}")
     plt.axis("off")
 
     # 显示纯热图
@@ -177,6 +177,7 @@ def show_cam_on_image(img_tensor, mask, alpha=0.3):
     plt.axis("off")
 
     plt.tight_layout()
+    plt.savefig('imgvis.tiff', dpi=300)
     plt.show()
 
 
@@ -188,7 +189,7 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained(bert_path)
     start_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     save_dir = "/home/yanshuyu/Data/AID/TAK/checkpoints"
-    df = pd.read_excel(excel_path, sheet_name='714')
+    df = pd.read_excel(excel_path, sheet_name='cz411')
     label_col = df.columns[-1]
 
     num_labels = 3
@@ -202,7 +203,7 @@ if __name__ == "__main__":
     X_np = imputer.fit_transform(X)
     scaler = StandardScaler()
     X_np = scaler.fit_transform(X_np)
-    report = df['mra_examination_re_des_1'].astype(str).tolist()[:len(X_np)]
+    report = df['mra_report'].astype(str).tolist()[:len(X_np)]
     labels_series = df[label_col].astype(int)
 
     y_for_dataset = labels_series.values
@@ -229,15 +230,17 @@ if __name__ == "__main__":
 
     tab_dim = X_np.shape[1]
     model = ImageEncoder().to(device)
-    model.load_state_dict(torch.load('/home/yanshuyu/Data/AID/TAK/checkpoints/resnet18_20251224_174630_epoch2_acc0.4406.pth'))
+    model.load_state_dict(torch.load('/home/yanshuyu/Data/AID/TAK/best_model/imgvis/1323thorax.pth'))
     target_layer = model.encoder[-2]
     grad_cam = GradCAM(model, target_layer)
 
-    for batch in tqdm(train_loader):
-        head = batch['thorax'].to(device)
+    for batch in tqdm(val_loader):
+        head = batch[('thorax')].to(device)
         TA = batch['TA']
-        mask = grad_cam(head, class_idx=None)
-        show_cam_on_image(head, mask)
-        input()
+        label = batch['label']
+        if TA in [['TA1323'], ['TA1399']]:
+            mask = grad_cam(head, class_idx=None)
+            show_cam_on_image(head, mask)
+            input()
 
 

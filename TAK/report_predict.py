@@ -1,6 +1,6 @@
 from transformers import AutoTokenizer, AutoModel
 import os
-import copy
+import numpy as np
 import datetime
 import torch
 import torch.nn as nn
@@ -28,12 +28,11 @@ tokenizer = AutoTokenizer.from_pretrained("medicalai/ClinicalBERT")
 model = AutoModel.from_pretrained("medicalai/ClinicalBERT").to(device)
 
 
-
 excel_path = "/home/yanshuyu/Data/AID/all.xlsx"
 start_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 save_dir = "/home/yanshuyu/Data/AID/TAK/checkpoints"
 os.makedirs(save_dir, exist_ok=True)
-df = pd.read_excel(excel_path, sheet_name='714')
+df = pd.read_excel(excel_path, sheet_name='in')
 label_col = df.columns[-1]
 
 num_labels = 3
@@ -49,7 +48,7 @@ imputer = SimpleImputer(strategy="mean")
 X_np = imputer.fit_transform(X)
 scaler = StandardScaler()
 X_np = scaler.fit_transform(X_np)
-report = df['mra_examination_re_des_1'].astype(str).tolist()[:len(X_np)]
+report = df['mra_report_ch'].astype(str).tolist()[:len(X_np)]
 labels_series = df[label_col].astype(int)
 
 y_for_dataset = labels_series.values
@@ -73,8 +72,6 @@ train_loader = DataLoader(train_subset, batch_size=batch_size, shuffle=True,
                           num_workers=num_workers, pin_memory=True)
 val_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=False,
                         num_workers=num_workers, pin_memory=True)
-
-
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5)
 criterion = torch.nn.CrossEntropyLoss()
@@ -107,6 +104,7 @@ for epoch in range(num_epochs):
     total_val_loss = 0
     all_preds = []
     all_labels = []
+    all_s = []
     with torch.no_grad():
         for batch in val_loader:
             input_ids = batch["text_tokens"]["input_ids"].to(device)
@@ -122,6 +120,9 @@ for epoch in range(num_epochs):
             all_preds.extend(preds)
             all_labels.extend(labels.cpu().numpy())
 
+            probs = torch.softmax(logits, dim=1)
+            all_s.append(probs.cpu())
+
     avg_val_loss = total_val_loss / len(val_loader)
     print(f"Epoch {epoch + 1}/{num_epochs}, Validation Loss: {avg_val_loss:.4f}")
 
@@ -131,6 +132,9 @@ for epoch in range(num_epochs):
         torch.save(model.state_dict(), save_path)
         print(f"Best model saved at epoch {epoch + 1}")
 
+        y_score = torch.cat(all_s, dim=0).numpy()
+        np.savez('/home/yanshuyu/Data/AID/results/report.npz', y_score=y_score, model_name='Unimodal (Report)')
+
 # 加载最佳权重
 model.load_state_dict(torch.load(save_path))
 model.eval()
@@ -138,3 +142,4 @@ model.eval()
 # 输出分类报告
 print("\nClassification Report:")
 print(classification_report(all_labels, all_preds, digits=4))
+

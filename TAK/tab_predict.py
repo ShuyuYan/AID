@@ -18,7 +18,7 @@ XGBoost+ClassWeight方法效果最好
 """
 
 # ========== 数据读取 ==========
-df = pd.read_excel(os.path.expanduser('~/Data/AID/all.xlsx'), sheet_name='714')
+df = pd.read_excel(os.path.expanduser('~/Data/AID/all.xlsx'), sheet_name='in')
 target_col = df.columns[-1]
 
 # 特征 + 标签
@@ -43,11 +43,11 @@ def get_models(class_weight=None):
             n_estimators=200, random_state=42, class_weight=class_weight
         ),
         "XGBoost": xgb.XGBClassifier(
-            n_estimators=300, learning_rate=0.1, max_depth=5,
+            n_estimators=1000, learning_rate=0.001, max_depth=50,
             random_state=42, use_label_encoder=False, eval_metric="mlogloss"
         ),
         "TabPFN": TabPFNClassifier(
-            model_path='/home/yanshuyu/Downloads/tabpfn-v2-classifier.ckpt'
+            model_path='/home/yanshuyu/Data/AID/TAK/TabPFN/tabpfn-v2-classifier-v2_default.ckpt'
         )
     }
 
@@ -86,13 +86,18 @@ for name, model in get_models().items():
     if name == "TabPFN":
         model.fit(X_train, y_train)
         y_test_pred = model.predict(X_test)
+        y_test_proba = model.predict_proba(X_test)  # shape (N, 3)
         test_acc = accuracy_score(y_test, y_test_pred)
-        test_f1 = f1_score(y_test, y_test_pred, average='macro')
-
+        test_f1 = f1_score(y_test, y_test_pred, average="macro")
         cv_res = {
             "test_accuracy": [test_acc],
             "test_f1_macro": [test_f1]
         }
+        np.savez(
+            "tab.npz",
+            y_score=y_test_proba,
+            model_name="Unimodal (SCD)"
+        )
     else:
         cv_res = cross_validate(model, X_train, y_train, cv=5, scoring=scoring)
 

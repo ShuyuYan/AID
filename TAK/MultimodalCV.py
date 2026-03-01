@@ -60,7 +60,7 @@ if __name__ == "__main__":
     num_workers = 4
     lr = 1e-3
     num_epochs = 10
-    mra_drop_prob = 0.8
+    mra_drop_prob = 0.2
     n_splits = 5
 
     X = df.select_dtypes(include=['int64', 'float64'])

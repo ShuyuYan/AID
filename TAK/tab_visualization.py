@@ -2,13 +2,15 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 from scipy import stats
+"""
+重要基线指标的箱线图可视化，标注组间的差异显著性
+"""
 
 df = pd.read_excel("/home/yanshuyu/Data/AID/all.xlsx", sheet_name='in')
 features = [
-    "esr", "crp", "saa",
-    "il1beta", "il6", "il8", "il2r", "il10", "tnf",
-    "igg", "igm", "iga", "ige",
-    "c3", "c4", "ch50"
+    "ESR", "CRP", "SAA", "IL-6", "IL-8", "IL-2R", "IL-10",
+    "IgG", "IgM", "IgA", "IgE", "WBC", "Neutrophil",
+    "Lymphocyte", "Monocyte", "CD19", "CD4", "CD8", "CD4/CD8"
 ]
 
 # Z-score标准化
@@ -87,22 +89,23 @@ for i, feature in enumerate(features):
                     # 绘制横线
                     plt.plot([x1, x1, x2, x2], [y_pos, y_pos + 0.1, y_pos + 0.1, y_pos], lw=0.7, c='black')
                     # 绘制星号
-                    plt.text((x1 + x2) / 2, y_pos + 0.1, p_text, ha='center', va='bottom', fontsize=16)
+                    plt.text((x1 + x2) / 2, y_pos + 0.05, p_text, ha='center', va='bottom', fontsize=14)
 
 for i in range(len(features)):
     if i % 2 == 0:
         ax.axvspan(i - 0.5, i + 0.5, color="#E6E6E6", alpha=0.25, zorder=0)
 
-plt.ylabel('Standardized Value (Z-Score)', fontsize=22)
-plt.xlabel('Indicators', fontsize=22)
+plt.ylabel('Standardized Value (Z-Score)', fontsize=24)
+plt.xlabel('Indicators', fontsize=24)
 plt.tick_params(axis='x', labelsize=22)
-plt.tick_params(axis='y', labelsize=22)
-legend = plt.legend(title='Prediction Treatment', loc='upper left', fontsize=16, title_fontsize=18)
+plt.tick_params(axis='y', labelsize=18)
+plt.xticks(rotation=30)
+legend = plt.legend(title='Prediction Treatment', loc='upper left', fontsize=14, title_fontsize=16)
 ax.set_xlim(-0.5, len(features) - 0.5)
 labels = ['Treatment A', 'Treatment B', 'Treatment C']
 for text, label in zip(legend.get_texts(), labels):
     text.set_text(label)
 plt.ylim(plot_data['Z-Score Value'].min() - 0.3, plot_data['Z-Score Value'].max() + 2)
 plt.tight_layout()
-plt.savefig('tab_visualization.png', dpi=1000)
+plt.savefig('tab_visualization.svg', dpi=300)
 plt.show()

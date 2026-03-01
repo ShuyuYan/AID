@@ -3,48 +3,42 @@ import torch
 import torch.nn as nn
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix, roc_curve, auc, roc_auc_score
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 from tqdm import tqdm
 from utils.TADataset import TADataset
 from utils.model import ImageTabTextModel
+from sklearn.metrics import classification_report
 
-"""
-三模态数据融合预测流程
-python TAK/predict.py --input /home/yanshuyu/Data/AID/all.xlsx 
---checkpoint /home/yanshuyu/Data/AID/TAK/checkpoints/20260114_185938_epoch9_acc0.9326.pth
---train_data /home/yanshuyu/Data/AID/all.xlsx --output /home/yanshuyu/Data/AID/out1.xlsx
-"""
+
+def set_all_seeds(seed=42):
+    import random
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 def load_model(checkpoint_path, num_labels, tab_dim, bert_path, device):
     # 加载checkpoint添加weights_only=False）
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
-    # 判断checkpoint格式
-    if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
-        # 新格式：包含完整信息
-        state_dict = checkpoint['model_state_dict']
-        tabpfn_classifier = checkpoint.get('tabpfn_classifier', None)
-        projection_in_features = checkpoint.get('projection_in_features', None)
-        imputer = checkpoint.get('imputer', None)
-        scaler = checkpoint.get('scaler', None)
-    else:
-        # 旧格式：只有state_dict
-        state_dict = checkpoint
-        tabpfn_classifier = None
-        projection_in_features = None
-        imputer = None
-        scaler = None
+    state_dict = checkpoint['model_state_dict']
+    tabpfn_classifier = checkpoint.get('tabpfn_classifier', None)
+    projection_in_features = checkpoint.get('projection_in_features', None)
+    imputer = checkpoint.get('imputer', None)
+    scaler = checkpoint.get('scaler', None)
+    X_tab_context = checkpoint.get('tabpfn_X_context', None)
+    y_tab_context = checkpoint.get('tabpfn_y_context', None)
 
-        # 从state_dict推断projection维度
-        proj_key = 'tab_encoder.projection.weight'
-        if proj_key in state_dict:
-            projection_in_features = state_dict[proj_key].shape[1]
-
-    # 创建模型
     model = ImageTabTextModel(
         num_labels=num_labels,
         tab_dim=tab_dim,
@@ -57,15 +51,9 @@ def load_model(checkpoint_path, num_labels, tab_dim, bert_path, device):
     # 修复projection层维度
     if projection_in_features is not None:
         model.tab_encoder.projection = nn.Linear(projection_in_features, model.tab_encoder.out_dim)
-
-    # 恢复TabPFN分类器
-    if tabpfn_classifier is not None:
-        model.tab_encoder.tabpfn = tabpfn_classifier
-        model.tab_encoder.fitted = True
-        print("已恢复TabPFN分类器状态")
-
-    # 加载权重
     model.load_state_dict(state_dict)
+    model.tab_encoder.fit(X_tab_context, y_tab_context)
+
     model = model.to(device)
     model.eval()
 
@@ -94,17 +82,61 @@ def preprocess_data(df, label_col, fit_imputer=None, fit_scaler=None):
     return X_np, imputer, scaler
 
 
+def plot_confusion_matrix(cm, classes, output_path):
+    plt.figure(figsize=(6, 5))
+    cm = cm.astype(np.float64)
+    cm = cm / cm.sum(axis=1, keepdims=True)
+    sns.heatmap(cm, annot=True, fmt='.2f', cmap='Blues', xticklabels=classes,
+                yticklabels=classes, annot_kws={"fontsize": 18}, vmin=0.0, vmax=1.0,
+                cbar_kws={"ticks": np.linspace(0, 1, 6)})
+    plt.title('Confusion Matrix', fontsize=16, pad=12)
+    plt.ylabel('True Label', fontsize=14, labelpad=10)
+    plt.xlabel('Predicted Label', fontsize=14, labelpad=10)
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.show()
+
+
+def plot_roc_curve(y_true, y_score, n_classes, output_path):
+    plt.figure(figsize=(6, 5))
+    fpr = dict()
+    tpr = dict()
+    roc_auc = dict()
+    y_true_onehot = np.eye(n_classes)[y_true]
+
+    for i in range(n_classes):
+        fpr[i], tpr[i], _ = roc_curve(y_true_onehot[:, i], y_score[:, i])
+        roc_auc[i] = auc(fpr[i], tpr[i])
+        plt.plot(fpr[i], tpr[i], lw=2, label=f"Treatment {chr(ord('A') + i)} (AUC = {roc_auc[i]:.3f})")
+
+    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate', fontsize=14, labelpad=10)
+    plt.ylabel('True Positive Rate', fontsize=14, labelpad=10)
+    plt.title('ROC Curve on Internal Test Set', fontsize=16, pad=12)
+    # plt.title('ROC Curve on External Test Set', fontsize=16, pad=12)
+    plt.legend(loc="lower right")
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.show()
+
+
 def predict(
-        excel_path: str,
-        checkpoint_path: str,
-        train_excel_path: str = None,
+        excel_path: str = '/home/yanshuyu/Data/AID/all.xlsx',
+        checkpoint_path: str = '/home/yanshuyu/Data/AID/TAK/checkpoints/20260204_202736TrueTrueTrue_fold2_epoch2_acc0.9355.pth',
+        train_excel_path: str = '/home/yanshuyu/Data/AID/all.xlsx',
         bert_path: str = "/home/yanshuyu/Data/AID/TAK/Bio_ClinicalBERT",
-        output_path: str = None,
+        output_path: str = '/home/yanshuyu/Data/AID/out1.xlsx',
         batch_size: int = 8,
         num_workers: int = 4,
         max_length: int = 384,
         num_labels: int = 3,
+        do_eval: bool = True,
+        val_split: float = 0.2
+        # val_split: float = 0
 ):
+    set_all_seeds(42)
     """主预测函数"""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"使用设备: {device}")
@@ -113,11 +145,33 @@ def predict(
     tokenizer = AutoTokenizer.from_pretrained(bert_path)
 
     # 读取待预测数据
-    df = pd.read_excel(excel_path, sheet_name='out')
-    label_col = df.columns[-1]
+    df = pd.read_excel(excel_path, sheet_name='in')
+    label_col = 'type'
     print(f"加载待预测数据:  {len(df)} 条记录")
 
-    # 先尝试从checkpoint加载预处理器（添加 weights_only=False）
+    # 如果是评估模式，处理数据集划分
+    val_indices = []
+    if do_eval:
+        if val_split > 0:
+            indices = np.arange(len(df))
+            try:
+                labels = df[label_col].values
+                _, _, _, _, train_idx, val_idx = train_test_split(
+                    df, labels, indices, test_size=val_split, stratify=labels, random_state=42
+                )
+            except Exception as e:
+                print(f"无法进行分层划分（可能缺少标签列），使用随机划分: {e}")
+                train_idx, val_idx = train_test_split(indices, test_size=val_split, random_state=42)
+
+            df['dataset_split'] = 'train'
+            df.iloc[val_idx, df.columns.get_loc('dataset_split')] = 'val'
+            val_indices = val_idx
+            print(f"测试集 {len(val_idx)} 条")
+        else:
+            val_indices = np.arange(len(df))
+            df['dataset_split'] = 'val'
+            print(f"数据集大小: {len(df)} 条 (全部用于评估)")
+
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     saved_imputer = None
     saved_scaler = None
@@ -128,13 +182,11 @@ def predict(
 
     # 确定预处理器
     if saved_imputer is not None and saved_scaler is not None:
-        print("使用checkpoint中保存的预处理器")
         imputer = saved_imputer
         scaler = saved_scaler
     elif train_excel_path is not None:
-        print(f"从训练数据拟合预处理器:  {train_excel_path}")
         train_df = pd.read_excel(train_excel_path, sheet_name='in')
-        train_label_col = train_df.columns[-1]
+        train_label_col = 'type'
         train_X = train_df.select_dtypes(include=['int64', 'float64'])
         train_X = train_X.drop(columns=[train_label_col, 'pred'], errors='ignore')
 
@@ -150,13 +202,20 @@ def predict(
     tab_dim = X_np.shape[1]
 
     # 准备文本数据
-    report = df['mra_examination_re_des_1'].astype(str).tolist()[:len(X_np)]
+    report = df['mra_report'].astype(str).tolist()[:len(X_np)]
+    # report = df['mra_report_ch'].astype(str).tolist()[:len(X_np)]
 
-    # 使用-1作为占位标签
-    dummy_labels = np.full(len(X_np), -1, dtype=np.int64)
+    # 准备标签
+    if do_eval:
+        # 评估模式下，读取真实标签
+        try:
+            true_labels = df[label_col].astype(int).values
+        except Exception:
+            true_labels = np.full(len(X_np), -1, dtype=np.int64)
+    else:
+        true_labels = np.full(len(X_np), -1, dtype=np.int64)
 
-    # 创建数据集和数据加载器
-    dataset = TADataset(df, report, X_np, dummy_labels, tokenizer, max_length)
+    dataset = TADataset(df, report, X_np, true_labels, tokenizer, max_length)
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
@@ -165,20 +224,21 @@ def predict(
         pin_memory=True
     )
 
-    # 加载模型
-    print(f"加载模型: {checkpoint_path}")
     model, _, _ = load_model(checkpoint_path, num_labels, tab_dim, bert_path, device)
 
-    # 预测
     all_preds = []
     all_probs = []
+    all_labels = []
+    all_s = []
+    # all_l = []
 
-    print("开始预测...")
     with torch.no_grad():
         for batch in tqdm(dataloader, desc='预测中'):
             head = batch['head'].to(device)
             thorax = batch['thorax'].to(device)
+            leg = batch['leg'].to(device)
             tab = batch['tab'].to(device).float()
+            label = batch['label'].to(device)
 
             text_tokens = batch.get('text_tokens', None)
             if text_tokens is not None and text_tokens.get('input_ids', None) is not None:
@@ -190,32 +250,38 @@ def predict(
 
             head_mask = batch['head_mask'].to(device)
             thorax_mask = batch['thorax_mask'].to(device)
+            leg_mask = batch['leg_mask'].to(device)
 
-            logits, _ = model(head, thorax, tab, input_ids, attention_mask, head_mask, thorax_mask)
+            logits, _ = model(head, thorax, leg, tab, input_ids, attention_mask, head_mask, thorax_mask, leg_mask)
 
             probs = torch.softmax(logits, dim=1)
             preds = torch.argmax(logits, dim=1)
 
             all_preds.extend(preds.cpu().tolist())
             all_probs.extend(probs.cpu().numpy())
+            all_labels.extend(label.cpu().numpy())
+            all_s.append(probs.cpu())
+            # all_l.append(label.cpu())
 
-    # 将预测结果添加到DataFrame
     df['predicted_label'] = all_preds
-
-    # 添加各类别的概率
+    y_score = torch.cat(all_s, dim=0).numpy()[val_indices]
+    # y_true = torch.cat(all_l, dim=0).numpy()[val_indices]
+    # np.save('/home/yanshuyu/Data/AID/results/y_true.npy', y_true)
+    np.savez('/home/yanshuyu/Data/AID/results/multimodal.npz', y_score=y_score, model_name='Multimodal')
+    val_labels = [all_labels[i] for i in val_indices]
+    val_preds = [all_preds[i] for i in val_indices]
+    print(classification_report(val_labels, val_preds, labels=[0, 1, 2], digits=3))
     all_probs = np.array(all_probs)
     for i in range(num_labels):
         df[f'prob_class_{i}'] = all_probs[:, i]
 
-    # 添加预测方案的文字描述
     label_mapping = {
-        0: "治疗方案A",
-        1: "治疗方案B",
-        2: "治疗方案C"
+        0: "Treatment A",
+        1: "Treatment B",
+        2: "Treatment C"
     }
     df['predicted_treatment'] = df['predicted_label'].map(label_mapping)
 
-    # 保存结果
     if output_path is None:
         base, ext = os.path.splitext(excel_path)
         output_path = f"{base}_predicted{ext}"
@@ -223,47 +289,29 @@ def predict(
     df.to_excel(output_path, index=False)
     print(f"预测完成！结果已保存至: {output_path}")
 
-    # 打印统计信息
-    print("\n========== 预测结果统计 ==========")
-    print(df['predicted_treatment'].value_counts())
-    print(f"\n总计:  {len(df)} 条记录")
+    if do_eval and len(val_indices) > 0:
+        print("\n========== 验证集评估报告 ==========")
+        val_true = true_labels[val_indices]
+        val_pred = np.array(all_preds)[val_indices]
+        val_prob = all_probs[val_indices]
+
+        acc = np.mean(val_true == val_pred)
+        print(f"验证集准确率 (Accuracy): {acc:.4f}")
+
+        output_dir = os.path.dirname(output_path)
+        base_name = os.path.splitext(os.path.basename(output_path))[0]
+
+        # 1. 绘制混淆矩阵
+        cm = confusion_matrix(val_true, val_pred)
+        cm_path = os.path.join(output_dir, f"{base_name}_confusion_matrix.png")
+        plot_confusion_matrix(cm, list(label_mapping.values()), cm_path)
+
+        # 2. 绘制ROC曲线
+        roc_path = os.path.join(output_dir, f"{base_name}_roc_curve.png")
+        plot_roc_curve(val_true, val_prob, num_labels, roc_path)
 
     return df
 
 
-def main():
-    """命令行入口"""
-    import argparse
-
-    parser = argparse.ArgumentParser(description='三模态融合治疗方案预测')
-    parser.add_argument('--input', '-i', type=str, required=True,
-                        help='待预测的Excel文件路径')
-    parser.add_argument('--checkpoint', '-c', type=str, required=True,
-                        help='模型权重文件路径')
-    parser.add_argument('--train_data', '-t', type=str, default=None,
-                        help='训练数据Excel路径（如果checkpoint不包含预处理器则必须提供）')
-    parser.add_argument('--output', '-o', type=str, default=None,
-                        help='输出Excel文件路径')
-    parser.add_argument('--bert_path', type=str,
-                        default="/home/yanshuyu/Data/AID/TAK/Bio_ClinicalBERT",
-                        help='BERT模型路径')
-    parser.add_argument('--batch_size', type=int, default=8,
-                        help='批次大小')
-    parser.add_argument('--num_workers', type=int, default=4,
-                        help='数据加载器工作进程数')
-
-    args = parser.parse_args()
-
-    predict(
-        excel_path=args.input,
-        checkpoint_path=args.checkpoint,
-        train_excel_path=args.train_data,
-        bert_path=args.bert_path,
-        output_path=args.output,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-    )
-
-
 if __name__ == "__main__":
-    main()
+    predict()

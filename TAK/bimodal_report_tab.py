@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 import pandas as pd
 from torch import nn
@@ -34,13 +35,7 @@ class MultiModalClassifier(nn.Module):
 
         # 表格特征模块
         self.tab_fc = nn.Sequential(
-            nn.Linear(tab_input_dim, 64),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-            nn.Dropout(0.4),
-
-            nn.Linear(64, 32),
-            nn.BatchNorm1d(32),
+            nn.Linear(tab_input_dim, 32),
             nn.ReLU(),
             nn.Dropout(0.3),
 
@@ -121,7 +116,7 @@ if __name__ == "__main__":
     max_length = 384
     best_acc = 0.50
 
-    df = pd.read_excel(excel_path, sheet_name='effect1')
+    df = pd.read_excel(excel_path, sheet_name='in')
     target_col = df.columns[-1]
     y = df[target_col].values
     X = df.select_dtypes(include=["int64", "float64"])
@@ -130,8 +125,8 @@ if __name__ == "__main__":
     X = imputer.fit_transform(X)
     scaler = StandardScaler()
     X = scaler.fit_transform(X)
-    df_text = pd.read_excel(excel_path, sheet_name='effect1')
-    report_col = 'mra_report'
+    df_text = pd.read_excel(excel_path, sheet_name='in')
+    report_col = 'mra_report_ch'
     report = df_text[report_col].astype(str).tolist()[:len(X)]
     label_encoder = LabelEncoder()
     y = label_encoder.fit_transform(y)
@@ -192,6 +187,7 @@ if __name__ == "__main__":
         model.eval()
         val_loss = 0
         preds, true_labels = [], []
+        all_s = []
         with torch.no_grad():
             for batch in val_loader:
                 input_ids = batch['text_tokens']['input_ids'].to(device)
@@ -205,6 +201,8 @@ if __name__ == "__main__":
                 true_labels.extend(label.cpu().numpy())
                 loss = criterion(logits, label)
                 val_loss += loss.item()
+                probs = torch.softmax(logits, dim=1)
+                all_s.append(probs.cpu())
 
         acc = accuracy_score(true_labels, preds)
         writer.add_scalar('Val Loss', val_loss, epoch)
@@ -222,3 +220,6 @@ if __name__ == "__main__":
             save_path = os.path.join(save_dir, f"acc{acc:.4f}_epoch{epoch + 1}.pt")
             torch.save(model.state_dict(), save_path)
             print(f"模型权重已保存至: {save_path}")
+            y_score = torch.cat(all_s, dim=0).numpy()
+            np.savez('/home/yanshuyu/Data/AID/results/report_tab.npz',
+                     y_score=y_score, model_name='Bimodal (Report+SCD)')

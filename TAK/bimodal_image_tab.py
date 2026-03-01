@@ -1,21 +1,35 @@
+import os
+import copy
+import datetime
+
+import numpy as np
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 import pandas as pd
-from torch import nn
 from torch.utils.data import DataLoader, Subset
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.impute import SimpleImputer
-from transformers import AutoTokenizer, AutoModel
+from sklearn.metrics import classification_report
 import torchvision.models as models
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.tensorboard import SummaryWriter
-import os
-import datetime
 from tqdm import tqdm
-from sklearn.metrics import accuracy_score, classification_report
+from tabpfn import TabPFNClassifier  # 确保安装了 tabpfn
+from transformers import AutoTokenizer
+
+# 请确保 utils.model 中包含 GateFusion 类
 from utils.TADataset import TADataset
+from utils.model import GateFusion
+
+"""
+双模态数据融合（图像+表格）预测最终治疗方案
+使用指定的 ImageEncoder 和 TabPFNEncoder
+"""
 
 
+# --- 1. 定义 ImageEncoder ---
 class ImageEncoder(nn.Module):
     def __init__(self, backbone="resnet18", pretrained=True, out_dim=256):
         super().__init__()
@@ -27,245 +41,296 @@ class ImageEncoder(nn.Module):
             in_features = 2048
         else:
             raise ValueError("Unsupported backbone")
-
-        self.encoder = nn.Sequential(*list(model.children())[:-1])
+        self.encoder = nn.Sequential(*list(model.children())[:-1])  # → [B, C, 1, 1]
         self.fc = nn.Linear(in_features, out_dim)
 
     def forward(self, x):
-        x = self.encoder(x)
-        x = x.flatten(1)
-        x = self.fc(x)
+        x = self.encoder(x)  # [B, C, 1, 1]
+        x = x.flatten(1)  # [B, C]
+        x = self.fc(x)  # [B, out_dim]
         return x
 
 
-class TabularEncoder(nn.Module):
-    def __init__(self, in_dim, out_dim=128):
+# --- 2. 定义 TabPFNEncoder ---
+class TabPFNEncoder(nn.Module):
+    def __init__(self, in_dim, out_dim=128, n_ensemble=4):
         super().__init__()
-        self.mlp = nn.Sequential(
-            nn.Linear(in_dim, 256),
-            nn.ReLU(),
-            nn.LayerNorm(256),
-            nn.Dropout(0.2),
-
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.LayerNorm(128),
-            nn.Dropout(0.2),
-
-            nn.Linear(128, out_dim),
-            nn.ReLU(),
-            nn.LayerNorm(out_dim),
-            nn.Dropout(0.1),
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        # 注意：TabPFNClassifier 初始化比较耗时，且显存占用较大
+        self.tabpfn = TabPFNClassifier(
+            model_path='/home/yanshuyu/Data/AID/TAK/TabPFN/tabpfn-v2-classifier-v2_default.ckpt',
+            device='cuda' if torch.cuda.is_available() else 'cpu',
+            n_estimators=n_ensemble
         )
+
+        self.fitted = False
+        self.projection = nn.Linear(512, out_dim)
+
+        self.fallback_mlp = nn.Sequential(
+            nn.Linear(in_dim, 128),
+            nn.ReLU(),
+            nn.Dropout(0.4),
+            nn.Linear(128, out_dim),
+        )
+
+    def fit(self, X_train, y_train):
+        if isinstance(X_train, torch.Tensor):
+            X_train = X_train.detach().cpu().numpy()
+        if isinstance(y_train, torch.Tensor):
+            y_train = y_train.detach().cpu().numpy()
+
+        self.tabpfn.fit(X_train, y_train)
+        self.fitted = True
+        return self
+
+    def extract_tabpfn_features(self, x):
+        if isinstance(x, torch.Tensor):
+            device = x.device
+            x_np = x.detach().cpu().numpy()
+        else:
+            device = 'cpu'
+            x_np = x
+
+        # TabPFN 的 predict_proba 输出形状是 [N, n_classes]
+        # 如果要作为特征使用，这通常维度较低。
+        # 如果您想用 predict_proba 作为特征：
+        proba = self.tabpfn.predict_proba(x_np)
+        features = torch.tensor(proba, dtype=torch.float32, device=device)
+        return features
 
     def forward(self, x):
-        return self.mlp(x)
+        if not self.fitted:
+            return self.fallback_mlp(x)
+
+        with torch.no_grad():
+            tabpfn_feat = self.extract_tabpfn_features(x)
+
+        # 动态调整 projection 层以匹配 TabPFN 的输出维度 (通常是 num_classes)
+        # 注意：这会导致在推理时重新初始化层，如果 num_classes 固定，建议在 init 中定死
+        if tabpfn_feat.shape[-1] != self.projection.in_features:
+            # 为了避免训练中途重置参数，建议在 fit 后或 init 确定维度。
+            # 这里保留原逻辑，但需注意如果 batch 间维度不变则无影响。
+            if self.projection.in_features != tabpfn_feat.shape[-1]:
+                self.projection = nn.Linear(
+                    tabpfn_feat.shape[-1], self.out_dim
+                ).to(x.device)
+
+        projected_feat = self.projection(tabpfn_feat)
+        return projected_feat
 
 
-class GateFusion(nn.Module):
-    def __init__(self, img_dim=256, tab_dim=128, hidden_dim=256):
-        super().__init__()
-        self.tab_proj = nn.Linear(tab_dim, img_dim)
-        self.gate_fc = nn.Sequential(
-            nn.Linear(img_dim * 2, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, img_dim),
-            nn.Sigmoid()
-        )
+# --- 3. 定义整合模型 ImageTabModel ---
+class ImageTabModel(nn.Module):
+    def __init__(self, num_labels, tab_dim, img_backbone="resnet18", feature_dim=256, tab_out_dim=128):
+        super(ImageTabModel, self).__init__()
 
-    def forward(self, img_feat, tab_feat):
-        tab_feat = self.tab_proj(tab_feat)
-        x = torch.cat([img_feat, tab_feat], dim=1)
-        gate = self.gate_fc(x)
-        fused = gate * img_feat + (1 - gate) * tab_feat
-        return fused
+        # 图像编码器 (ResNet18)
+        self.image_encoder = ImageEncoder(backbone=img_backbone, out_dim=feature_dim)
 
+        # 表格编码器 (TabPFN)
+        self.tab_encoder = TabPFNEncoder(in_dim=tab_dim, out_dim=tab_out_dim)
 
-class ImageTabularModel(nn.Module):
-    def __init__(self, num_labels, tab_dim,
-                 img_backbone="resnet18",
-                 img_dim=256, tab_out_dim=128,
-                 fused_dim=256):
-        super().__init__()
+        # 图像融合层 (GateFusion)
+        # 将 Head, Thorax, Leg 三个特征 (feature_dim) 融合为一个 (feature_dim)
+        self.img_gate_fusion = GateFusion(feature_dim, feature_dim, feature_dim)
 
-        self.image_encoder = ImageEncoder(
-            backbone=img_backbone,
-            out_dim=img_dim
-        )
+        # 分类器 (图像特征 + 表格特征)
+        self.classifier = nn.Linear(feature_dim + tab_out_dim, num_labels)
 
-        self.tab_encoder = TabularEncoder(
-            in_dim=tab_dim,
-            out_dim=tab_out_dim
-        )
+    def fit_tab_encoder(self, X, y):
+        self.tab_encoder.fit(X, y)
 
-        self.fusion = GateFusion(img_dim, tab_out_dim, fused_dim)
+    def forward(self, head, thorax, leg, tab, head_mask=None, thorax_mask=None, leg_mask=None):
+        # --- 图像模态 ---
+        # 提取特征 [B, feature_dim]
+        h_feat = self.image_encoder(head)
+        t_feat = self.image_encoder(thorax)
+        l_feat = self.image_encoder(leg)
 
-        self.classifier = nn.Sequential(
-            nn.Linear(fused_dim, 128),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(128, num_labels)
-        )
+        # 应用 Mask
+        if head_mask is not None: h_feat = h_feat * head_mask
+        if thorax_mask is not None: t_feat = t_feat * thorax_mask
+        if leg_mask is not None: l_feat = l_feat * leg_mask
 
-    def forward(self, image, tab):
-        img_feat = self.image_encoder(image)
+        # 融合三个部位 [B, 3, feature_dim] -> [B, feature_dim]
+        img_fused = self.img_gate_fusion(h_feat, t_feat)
+
+        # --- 表格模态 ---
         tab_feat = self.tab_encoder(tab)
-        fused = self.fusion(img_feat, tab_feat)
-        logits = self.classifier(fused)
-        return logits
 
+        # --- 最终融合与分类 ---
+        combined_feat = torch.cat([img_fused, tab_feat], dim=1)
+        logits = self.classifier(combined_feat)
+
+        return logits, combined_feat
 
 
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    bert_path = "/home/yanshuyu/Data/AID/TAK/Bio_ClinicalBERT"
     excel_path = "/home/yanshuyu/Data/AID/all.xlsx"
+    bert_path = "/home/yanshuyu/Data/AID/TAK/Bio_ClinicalBERT"
+    start_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    save_dir = "/home/yanshuyu/Data/AID/TAK/checkpoints"
+    os.makedirs(save_dir, exist_ok=True)
     tokenizer = AutoTokenizer.from_pretrained(bert_path)
-    writer = SummaryWriter(log_dir="/home/yanshuyu/Data/AID/runs/bimodal_image_tab")
 
-    max_length = 384
-    num_epochs = 200
-    lr = 1e-4
-
-    df = pd.read_excel(excel_path, sheet_name='effect1')
+    # --- 数据加载 ---
+    df = pd.read_excel(excel_path, sheet_name='in')
     label_col = df.columns[-1]
+
+    num_labels = 3
+    max_length = 384
+    batch_size = 8
+    num_workers = 4
+    lr = 1e-4
+    num_epochs = 100
+    best_val_acc = 0.5
+    mra_drop_prob = 0.25
+
     X = df.select_dtypes(include=['int64', 'float64'])
-    X = X.drop(columns=[label_col], errors='ignore')
-    y = df[label_col].values
+    X = X.drop(columns=[label_col, 'pred'], errors='ignore')
     imputer = SimpleImputer(strategy="mean")
-    X = imputer.fit_transform(X)
+    X_np = imputer.fit_transform(X)
     scaler = StandardScaler()
-    X = scaler.fit_transform(X)
+    X_np = scaler.fit_transform(X_np)
 
-    report = df['mra_examination_re_des_1'].astype(str).tolist()[:len(X)]
-    label_encoder = LabelEncoder()
-    y = label_encoder.fit_transform(y)
-    num_labels = len(label_encoder.classes_)
+    report = df['mra_report'].astype(str).tolist()[:len(X_np)]
+    labels_series = df[label_col].astype(int)
+    y_for_dataset = labels_series.values
 
-    train_idx, val_idx = train_test_split(
-        range(len(df)),
+    # Dataset 初始化 (不需要 tokenizer)
+    data = TADataset(df, report, X_np, y_for_dataset, tokenizer, max_length=max_length)
+
+    all_indices = df.index.to_numpy()
+    labeled_indices = df.index[df[label_col] != -1].to_numpy()
+    unlabeled_indices = df.index[df[label_col] == -1].to_numpy()
+
+    train_lab_idx, val_lab_idx = train_test_split(
+        labeled_indices,
         test_size=0.2,
         random_state=42,
-        stratify=y
+        stratify=df.loc[labeled_indices, label_col].values
     )
-    data = TADataset(df, report, X, y, tokenizer, max_length)
-    train_data = Subset(data, train_idx)
-    val_data = Subset(data, val_idx)
-    train_loader = DataLoader(train_data, batch_size=4, shuffle=True)
-    val_loader = DataLoader(val_data, batch_size=4, shuffle=False)
-    tab_dim = X.shape[1]
 
-    model = ImageTabularModel(
+    train_indices = list(train_lab_idx) + list(unlabeled_indices.tolist())
+    val_indices = list(val_lab_idx)
+
+    train_subset = Subset(data, train_indices)
+    val_subset = Subset(data, val_indices)
+    train_loader = DataLoader(train_subset, batch_size=batch_size, shuffle=True,
+                              num_workers=num_workers, pin_memory=True)
+    val_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=False,
+                            num_workers=num_workers, pin_memory=True)
+
+    # --- 模型初始化 ---
+    tab_dim = X_np.shape[1]
+    model = ImageTabModel(
         num_labels=num_labels,
         tab_dim=tab_dim,
         img_backbone="resnet18",
-        img_dim=256,
-        tab_out_dim=128,
-        fused_dim=256
-    ).to(device)
+        feature_dim=256,
+        tab_out_dim=128
+    )
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    # --- 训练 TabPFN ---
+    print("Fitting TabPFN on labeled training data...")
+    X_tab_for_fit = X_np[train_lab_idx]
+    y_for_fit = y_for_dataset[train_lab_idx]
+    model.fit_tab_encoder(X_tab_for_fit, y_for_fit)
+
+    model = model.to(device)
+
+    # --- 优化器设置 ---
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-3)
     criterion = nn.CrossEntropyLoss()
-    scheduler = ReduceLROnPlateau(optimizer, 'min', patience=5, factor=0.5)
 
-    # ------------------------ 新增：保存最优模型 ------------------------ #
-    best_val_acc = 0
-    save_path = "/home/yanshuyu/Data/AID/TAK/best_model/best_bimodal_model.pth"  # ← 新增
-
-    for epoch in range(num_epochs):
+    # --- 训练循环 ---
+    for epoch in range(1, num_epochs + 1):
         model.train()
-        total_loss = 0
+        total_loss = 0.0
 
-        for batch in tqdm(train_loader, desc=f'Epoch {epoch + 1}/{num_epochs} [Train]'):
+        for batch in tqdm(train_loader, desc=f'Epoch {epoch} [Train]'):
             head = batch['head'].to(device)
-            tab = batch['tab'].to(device)
+            thorax = batch['thorax'].to(device)
+            leg = batch['leg'].to(device)
+            tab = batch['tab'].to(device).float()
             label = batch['label'].to(device)
 
+            head_mask = batch['head_mask'].to(device)
+            thorax_mask = batch['thorax_mask'].to(device)
+            leg_mask = batch['leg_mask'].to(device)
+
             optimizer.zero_grad()
-            logits = model(head, tab)
-            probs = torch.softmax(logits, dim=1)
 
-            mask_valid = (label != -1)
-            loss_sup = criterion(logits[mask_valid], label[mask_valid]) if mask_valid.sum() > 0 else torch.tensor(0.0)
+            # 随机 Mask 增强
+            rand_head_mask = (torch.rand(head.size(0), 1, device=device) > mra_drop_prob).float()
+            rand_thorax_mask = (torch.rand(head.size(0), 1, device=device) > mra_drop_prob).float()
+            rand_leg_mask = (torch.rand(leg.size(0), 1, device=device) > mra_drop_prob).float()
 
-            mask_invalid = (label == -1)
-            loss_pseudo = torch.tensor(0.0, device=device)
+            head_mask = head_mask * rand_head_mask
+            thorax_mask = thorax_mask * rand_thorax_mask
+            leg_mask = leg_mask * rand_leg_mask
 
-            if mask_invalid.sum() > 0:
-                invalid_probs = probs[mask_invalid]
-                max_prob, pseudo_label = torch.max(invalid_probs, dim=1)
+            logits, _ = model(head, thorax, leg, tab, head_mask, thorax_mask, leg_mask)
 
-                mask_high = (max_prob >= 0.9)
-                if mask_high.sum() > 0:
-                    loss_pseudo += criterion(
-                        logits[mask_invalid][mask_high],
-                        pseudo_label[mask_high]
-                    ) * 1.0
-
-                mask_mid = (max_prob < 0.9) & (max_prob >= 0.6)
-                if mask_mid.sum() > 0:
-                    soft_target = invalid_probs[mask_mid].detach()
-                    pred = probs[mask_invalid][mask_mid]
-                    loss_kl = torch.nn.KLDivLoss(reduction="batchmean")(
-                        torch.log(pred + 1e-12), soft_target
-                    )
-                    loss_pseudo += 0.3 * loss_kl
-
-            loss = loss_sup + loss_pseudo
+            loss = criterion(logits, label)
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
 
-        # ------------------------ Validation ------------------------ #
+        # --- 验证循环 ---
         model.eval()
-        val_loss = 0
+        val_loss = 0.0
+        correct = 0
+        total = 0
         all_preds = []
         all_labels = []
+        all_s = []
 
         with torch.no_grad():
-            for batch in tqdm(val_loader, desc=f'Epoch {epoch + 1}/{num_epochs} [Val]'):
+            for batch in tqdm(val_loader, desc=f'Epoch {epoch} [Val]'):
                 head = batch['head'].to(device)
-                tab = batch['tab'].to(device)
+                thorax = batch['thorax'].to(device)
+                leg = batch['leg'].to(device)
+                tab = batch['tab'].to(device).float()
                 label = batch['label'].to(device)
 
-                mask_valid = (label != -1)
-                if mask_valid.sum() == 0:
-                    continue
+                head_mask = batch['head_mask'].to(device)
+                thorax_mask = batch['thorax_mask'].to(device)
+                leg_mask = batch['leg_mask'].to(device)
 
-                logits = model(head, tab)
-                loss = criterion(logits[mask_valid], label[mask_valid])
-                val_loss += loss.item()
+                logits, _ = model(head, thorax, leg, tab, head_mask, thorax_mask, leg_mask)
+                loss_batch = criterion(logits, label)
+                val_loss += loss_batch.item()
 
-                pred = torch.argmax(logits[mask_valid], dim=1)
-                all_preds.extend(pred.cpu().tolist())
-                all_labels.extend(label[mask_valid].cpu().tolist())
+                preds = torch.argmax(logits, dim=1)
+                all_preds.extend(preds.cpu().tolist())
+                all_labels.extend(label.cpu().tolist())
 
-        avg_train_loss = total_loss / len(train_loader)
-        avg_val_loss = val_loss / len(val_loader)
-        val_acc = accuracy_score(all_labels, all_preds)
+                correct += (preds == label).sum().item()
+                total += label.size(0)
+                probs = torch.softmax(logits, dim=1)
+                all_s.append(probs.cpu())
 
-        writer.add_scalar('Train Loss', avg_train_loss, epoch)
-        writer.add_scalar('Val Loss', avg_val_loss, epoch)
-        writer.add_scalar('Val Acc', val_acc, epoch)
+        if total > 0:
+            val_acc = correct / total
+            avg_train_loss = total_loss / len(train_loader)
+            avg_val_loss = val_loss / len(val_loader)
+        else:
+            val_acc = 0.0
+            avg_train_loss = 0.0
+            avg_val_loss = 0.0
 
-        print(f"Epoch {epoch + 1} | Train Loss: {avg_train_loss:.4f}"
-              f" | Val Loss: {avg_val_loss:.4f} | Val Acc: {val_acc:.4f}")
+        print(f"Epoch {epoch} | Train Loss: {avg_train_loss:.4f} |"
+              f" Val Loss: {avg_val_loss:.4f} | Val Acc: {val_acc:.4f}")
 
-        # ------------------------ 新增：输出 classification report ------------------------ #
-        print("\n=== Classification Report ===")
-        print(classification_report(
-            all_labels,
-            all_preds,
-            target_names=[str(c) for c in label_encoder.classes_],
-            digits=3
-        ))
-
-        # ------------------------ 新增：保存最优模型 ------------------------ #
-        if val_acc > best_val_acc:
+        if val_acc >= 0.7:
             best_val_acc = val_acc
-            torch.save(model.state_dict(), save_path)
-            print(f"🔥 Saved best model (Acc={best_val_acc:.4f}) to {save_path}")
+            print("\n=========== Classification Report ===========")
+            print(classification_report(all_labels, all_preds, labels=[0, 1, 2], digits=3))
+            y_score = torch.cat(all_s, dim=0).numpy()
+            np.savez('/home/yanshuyu/Data/AID/results/image_tab.npz',
+                     y_score=y_score, model_name='Bnimodal (Image+SCD)')
 
-        scheduler.step(avg_val_loss)
-
-    writer.close()
+    print("Training finished. Best val acc:", best_val_acc)

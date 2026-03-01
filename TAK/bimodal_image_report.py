@@ -1,6 +1,7 @@
 import torch
 import pandas as pd
 from torch import nn
+import numpy as np
 from torch.utils.data import DataLoader, Subset
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.model_selection import train_test_split
@@ -107,7 +108,7 @@ if __name__ == "__main__":
     num_epochs = 200
     lr = 1e-4
 
-    df = pd.read_excel(excel_path, sheet_name='effect1')
+    df = pd.read_excel(excel_path, sheet_name='in')
     label_col = df.columns[-1]
     X = df.select_dtypes(include=['int64', 'float64'])
     X = X.drop(columns=[label_col], errors='ignore')
@@ -117,7 +118,7 @@ if __name__ == "__main__":
     scaler = StandardScaler()
     X = scaler.fit_transform(X)
 
-    report = df['mra_examination_re_des_1'].astype(str).tolist()[:len(X)]
+    report = df['mra_report'].astype(str).tolist()[:len(X)]
     label_encoder = LabelEncoder()
     y = label_encoder.fit_transform(y)
     num_labels = len(label_encoder.classes_)
@@ -177,6 +178,7 @@ if __name__ == "__main__":
         total = 0
         all_preds = []
         all_labels = []
+        all_s = []
         with torch.no_grad():
             for batch in tqdm(val_loader, desc=f'Epoch {epoch + 1}/{num_epochs} [Val]'):
                 image = batch['head'].to(device)
@@ -196,6 +198,8 @@ if __name__ == "__main__":
                 preds = torch.argmax(logits, dim=1)
                 all_preds.extend(preds.cpu().numpy())
                 all_labels.extend(label.cpu().numpy())
+                probs = torch.softmax(logits, dim=1)
+                all_s.append(probs.cpu())
 
         avg_val_loss = val_loss / len(val_loader)
         val_acc = correct / total
@@ -217,10 +221,13 @@ if __name__ == "__main__":
         ))
 
         # 保存最优模型
-        if val_acc > best_val_acc:
+        if val_acc > 0.5:
             best_val_acc = val_acc
             torch.save(model.state_dict(), save_path)
             print(f"🔥 Saved best model (Acc={best_val_acc:.4f}) to {save_path}")
+            y_score = torch.cat(all_s, dim=0).numpy()
+            np.savez('/home/yanshuyu/Data/AID/results/image_report.npz', y_score=y_score,
+                     model_name='Bimodal (Image+Report)')
 
         scheduler.step(avg_val_loss)
 
