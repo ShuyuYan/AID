@@ -18,15 +18,13 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from utils.TADataset import TADataset
 from utils.model import *
+"""
+三模态数据融合预测治疗方案
+模态数量可选 + 五折交叉验证训练 + 分层学习率 + 缺失模态处理
+"""
 
-"""
-三模态数据融合预测最终治疗方案
-修改：
-1. 引入五折交叉验证 + 独立测试集
-2. 保持 checkpoint 字典结构与原代码完全一致，确保推理代码无需修改
-"""
+
 def create_zeros_like(tensor):
-    """生成与输入 tensor 形状相同的零向量"""
     if tensor is None:
         return None
     return torch.zeros_like(tensor)
@@ -60,7 +58,7 @@ if __name__ == "__main__":
     num_workers = 4
     lr = 1e-3
     num_epochs = 10
-    mra_drop_prob = 0.2
+    mra_drop_prob = 0.2  # 随机丢弃比例
     n_splits = 5
 
     X = df.select_dtypes(include=['int64', 'float64'])
@@ -79,7 +77,6 @@ if __name__ == "__main__":
     labeled_indices = df.index[df[label_col] != -1].to_numpy()
     unlabeled_indices = df.index[df[label_col] == -1].to_numpy()
 
-    # 1. 划分独立测试集 (20%)
     train_val_lab_idx, test_lab_idx = train_test_split(
         labeled_indices,
         test_size=0.2,
@@ -92,7 +89,6 @@ if __name__ == "__main__":
     test_loader = DataLoader(test_subset, batch_size=batch_size, shuffle=False,
                              num_workers=num_workers, pin_memory=True)
 
-    # 2. 五折交叉验证
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
     y_train_val = df.loc[train_val_lab_idx, label_col].values
 
@@ -243,7 +239,6 @@ if __name__ == "__main__":
                 print(f"=== Fold {fold + 1} Best Model Updated ===")
                 print(classification_report(all_labels, all_preds, labels=[0, 1, 2], digits=3))
 
-                # 文件名中保留 fold 信息，防止覆盖
                 ckpt_name = (f"{start_time}{use_image}{use_report}{use_tabular}_fold{fold + 1}"
                              f"_epoch{epoch}_acc{val_acc:.4f}.pth")
                 best_path = os.path.join(save_dir_base, ckpt_name)
@@ -252,7 +247,7 @@ if __name__ == "__main__":
                     'model_state_dict': model.state_dict(),
                     'tabpfn_X_context': X_tab_for_fit,
                     'tabpfn_y_context': y_for_fit,
-                    'tabpfn_train_idx': fold_train_lab_idx,  # 更新为当前折的训练索引
+                    'tabpfn_train_idx': fold_train_lab_idx,
                     'projection_in_features': model.tab_encoder.projection.in_features,
                     'imputer': imputer,
                     'scaler': scaler,
