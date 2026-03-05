@@ -19,6 +19,9 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from utils.TADataset import TADataset
+"""
+ResNet梯度权重可视化，输出原始MRA叠加热图
+"""
 
 
 class ImageEncoder(nn.Module):
@@ -66,37 +69,26 @@ class GradCAM:
         self.gradients = grad_output[0]
 
     def __call__(self, x, class_idx=None):
-        """
-        x: 输入图像 tensor, shape [1, C, H, W]
-        class_idx:以此类别的置信度来生成热图 (即"模型为什么觉得它是这一类")。如果不填，默认取预测概率最大的类。
-        """
-        # 1. 前向传播
         output = self.model(x)
 
         if class_idx is None:
             class_idx = torch.argmax(output, dim=1)
 
-        # 2. 反向传播求梯度
         self.model.zero_grad()
         target_score = output[0, class_idx]
         target_score.backward()
 
-        # 3. 获取梯度和特征图
         grads = self.gradients.cpu().data.numpy()[0]  # shape: [C, 7, 7]
         fmaps = self.activations.cpu().data.numpy()[0]  # shape: [C, 7, 7]
 
-        # 4. Global Average Pooling (计算权重)
         weights = np.mean(grads, axis=(1, 2))  # shape: [C]
 
-        # 5. 特征图加权求和
         cam = np.zeros(fmaps.shape[1:], dtype=np.float32)
         for i, w in enumerate(weights):
             cam += w * fmaps[i]
 
-        # 6. ReLU (只保留正向影响，去除负向影响)
         cam = np.maximum(cam, 0)
 
-        # 7. 归一化并Resize到输入图像大小
         cam = cv2.resize(cam, (x.shape[3], x.shape[2]))  # Resize to (W, H)
         cam = cam - np.min(cam)
         cam = cam / (np.max(cam) + 1e-8)  # Normalize to [0, 1]
@@ -105,72 +97,41 @@ class GradCAM:
 
 
 def show_cam_on_image(img_tensor, mask, alpha=0.3):
-    """
-    Args:
-        img_tensor: Tensor, shape [1, 3, H, W] or [3, H, W]
-        mask: numpy array or Tensor, shape [H, W], range [0, 1]
-        alpha: float, transparency of the heatmap
-    """
-    # --------------------------
-    # 1. 处理原始图像 (Tensor -> Numpy & 格式调整)
-    # --------------------------
-    # 如果有 batch 维度 (1, 3, 224, 224)，先去掉
     if img_tensor.dim() == 4:
         img_tensor = img_tensor.squeeze(0)
 
-    # 转换为 numpy 并调整维度: [C, H, W] -> [H, W, C]
     img = img_tensor.cpu().detach().numpy().transpose(1, 2, 0)
 
-    # 【重要】反归一化处理
-    # Dataloader 出来的图通常被 Normalize 过（会有负数）。
-    # 这里为了可视化，简单地将其线性拉伸到 [0, 1] 区间
     img = (img - img.min()) / (img.max() - img.min() + 1e-8)
 
-    # 转为 0-255 的 uint8 格式，方便 opencv 处理
     img_uint8 = np.uint8(255 * img)
 
-    # --------------------------
-    # 2. 处理 Mask (CAM 结果)
-    # --------------------------
     if isinstance(mask, torch.Tensor):
         mask = mask.cpu().detach().numpy()
 
-    # 如果 mask 有 batch 维度 (1, H, W)，去掉
     if mask.ndim == 3:
         mask = mask[0]
 
-    # 确保 mask 大小和图像一致 (防止因下采样导致尺寸不匹配)
+    # 确保mask大小和图像一致
     mask = cv2.resize(mask, (img.shape[1], img.shape[0]))
-
-    # --------------------------
-    # 3. 生成热图并叠加
-    # --------------------------
-    # 使用 JET colormap: 蓝色(低) -> 红色(高)
     heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
     heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)  # cv2 默认是 BGR，转为 RGB
 
-    # 叠加: 原始图 * (1-alpha) + 热图 * alpha
+    # 叠加
     overlay = heatmap * alpha + img_uint8 * (1 - alpha)
     overlay = np.uint8(overlay)
 
-    # --------------------------
-    # 4. 画图显示
-    # --------------------------
     plt.figure(figsize=(12, 5))
-
-    # 显示原图
     plt.subplot(1, 3, 1)
     plt.imshow(img)
     plt.title(f"{TA} {label}")
     plt.axis("off")
 
-    # 显示纯热图
     plt.subplot(1, 3, 2)
     plt.imshow(mask, cmap='jet')
     plt.title("Attention Map")
     plt.axis("off")
 
-    # 显示叠加图
     plt.subplot(1, 3, 3)
     plt.imshow(overlay)
     plt.title("Overlay (Red=Focus)")
@@ -179,7 +140,6 @@ def show_cam_on_image(img_tensor, mask, alpha=0.3):
     plt.tight_layout()
     plt.savefig('imgvis.tiff', dpi=300)
     plt.show()
-
 
 
 if __name__ == "__main__":
@@ -242,5 +202,3 @@ if __name__ == "__main__":
             mask = grad_cam(head, class_idx=None)
             show_cam_on_image(head, mask)
             input()
-
-
