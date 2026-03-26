@@ -26,7 +26,7 @@ plot_data = df_scaled.melt(id_vars=['type'], value_vars=features,
                            var_name='Features', value_name='Z-Score Value').dropna()
 
 sns.set_theme(style="white")
-plt.figure(figsize=(24, 10))  # 稍微增加宽度以容纳更多标注
+plt.figure(figsize=(24, 10))
 
 ax = sns.boxplot(x='Features', y='Z-Score Value', hue='type', data=plot_data,
                  hue_order=[0, 1, 2],
@@ -36,7 +36,7 @@ ax = sns.boxplot(x='Features', y='Z-Score Value', hue='type', data=plot_data,
                  fliersize=2)
 
 
-# 辅助函数：将p值转换为星号
+# 将p值转换为星号
 def get_p_text(p):
     if p < 0.001: return '***'
     if p < 0.01: return '**'
@@ -44,18 +44,12 @@ def get_p_text(p):
     return None
 
 
-# 遍历每个指标进行两两比较
 for i, feature in enumerate(features):
-    # 提取三组原始数据（用于统计）
     g0 = df[df['type'] == 0][feature].dropna()
     g1 = df[df['type'] == 1][feature].dropna()
     g2 = df[df['type'] == 2][feature].dropna()
 
-    # 提取标准化后的数据最大值（用于确定标注高度）
     curr_max = df_scaled[feature].max()
-
-    # 定义比较对和横线高度偏移
-    # x坐标修正：seaborn boxplot 中，同一组内的三个箱体中心分别在 i-0.26, i, i+0.26 附近
     pairs = [
         (0, 1, i - 0.26, i, curr_max + 0.5),  # 0 vs 1
         (1, 2, i, i + 0.26, curr_max + 1),  # 1 vs 2
@@ -71,24 +65,20 @@ for i, feature in enumerate(features):
             if p_kw < 0.05:
                 kw_significant = True
         except ValueError:
-            pass  # 数据异常时跳过
+            pass
 
-    # 步骤2：只有当全局检验显著时，才进行两两比较 (Post-hoc)
     if kw_significant:
         for p_idx1, p_idx2, x1, x2, y_pos in pairs:
             if len(groups[p_idx1]) > 0 and len(groups[p_idx2]) > 0:
                 _, p_val = stats.mannwhitneyu(groups[p_idx1], groups[p_idx2])
 
-                # Bonferroni 修正：P值乘以比较次数（3次）
                 p_val_corrected = p_val * 3
 
                 if p_val_corrected > 1: p_val_corrected = 1
                 p_text = get_p_text(p_val_corrected)
 
                 if p_text:
-                    # 绘制横线
                     plt.plot([x1, x1, x2, x2], [y_pos, y_pos + 0.1, y_pos + 0.1, y_pos], lw=0.7, c='black')
-                    # 绘制星号
                     plt.text((x1 + x2) / 2, y_pos + 0.05, p_text, ha='center', va='bottom', fontsize=14)
 
 for i in range(len(features)):
