@@ -150,6 +150,7 @@ if __name__ == "__main__":
     start_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     save_dir = "/home/yanshuyu/Data/AID/TAK/checkpoints"
     df = pd.read_excel(excel_path, sheet_name='cz411')
+    d = pd.read_excel(excel_path, sheet_name='imgvis', header=None)
     label_col = df.columns[-1]
 
     num_labels = 3
@@ -183,22 +184,32 @@ if __name__ == "__main__":
 
     train_subset = Subset(data, train_indices)
     val_subset = Subset(data, val_indices)
+    data_loader = DataLoader(data, batch_size=batch_size, shuffle=False,
+                              num_workers=num_workers, pin_memory=True)
     train_loader = DataLoader(train_subset, batch_size=batch_size, shuffle=False,
                               num_workers=num_workers, pin_memory=True)
     val_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=False,
                             num_workers=num_workers, pin_memory=True)
-
     tab_dim = X_np.shape[1]
-    model = ImageEncoder().to(device)
-    model.load_state_dict(torch.load('/home/yanshuyu/Data/AID/TAK/best_model/imgvis/1323thorax.pth'))
-    target_layer = model.encoder[-2]
-    grad_cam = GradCAM(model, target_layer)
 
-    for batch in tqdm(val_loader):
-        head = batch[('thorax')].to(device)
-        TA = batch['TA']
-        label = batch['label']
-        if TA in [['TA1323'], ['TA1399']]:
-            mask = grad_cam(head, class_idx=None)
-            show_cam_on_image(head, mask)
-            input()
+    for _, row in d.iterrows():
+        ta_name = [row[0]]
+        model = ImageEncoder().to(device)
+
+        target_layer = model.encoder[-2]
+        grad_cam = GradCAM(model, target_layer)
+
+        for batch in tqdm(data_loader):
+            TA = batch['TA']
+            label = batch['label']
+            if (TA == ta_name) or (isinstance(TA, (list, tuple)) and len(TA) and TA[0] == ta_name):
+                img = batch['head'].to(device)
+                model.load_state_dict(torch.load(row[3], map_location=device))
+                model.eval()
+                mask = grad_cam(img, class_idx=None)
+                show_cam_on_image(img, mask)
+                img = batch['thorax'].to(device)
+                model.load_state_dict(torch.load(row[4], map_location=device))
+                model.eval()
+                mask = grad_cam(img, class_idx=None)
+                show_cam_on_image(img, mask)
