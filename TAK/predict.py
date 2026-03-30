@@ -126,7 +126,7 @@ def plot_roc_curve(y_true, y_score, n_classes, output_path):
 
 def predict(
         excel_path: str = '/home/yanshuyu/Data/AID/all.xlsx',
-        checkpoint_path: str = '/home/yanshuyu/Data/AID/TAK/checkpoints/20260204_202736TrueTrueTrue_fold2_epoch2_acc0.9355.pth',
+        checkpoint_path: str = '/home/yanshuyu/Data/AID/TAK/best_model/multi_acc0.9275.pth',
         train_excel_path: str = '/home/yanshuyu/Data/AID/all.xlsx',
         bert_path: str = "/home/yanshuyu/Data/AID/TAK/Bio_ClinicalBERT",
         output_path: str = '/home/yanshuyu/Data/AID/out1.xlsx',
